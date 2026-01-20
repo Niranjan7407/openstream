@@ -6,9 +6,28 @@ export default function VideoStream({ stream, isLocal, isScreen, label }) {
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream
-      console.log('Setting stream on video element:', stream.id, 'Tracks:', stream.getTracks().length)
+      
+      // Log stream details
+      const tracks = stream.getTracks()
+      console.log('Setting stream on video element:', {
+        streamId: stream.id,
+        isLocal,
+        isScreen,
+        label,
+        tracks: tracks.map(t => ({
+          kind: t.kind,
+          label: t.label,
+          enabled: t.enabled,
+          muted: t.muted
+        }))
+      })
+      
+      // For screen shares, ensure audio plays
+      if (isScreen && !isLocal) {
+        videoRef.current.volume = 1.0
+      }
     }
-  }, [stream])
+  }, [stream, isLocal, isScreen, label])
 
   return (
     <div className="relative bg-black rounded-lg overflow-hidden shadow-lg aspect-video">
@@ -16,12 +35,22 @@ export default function VideoStream({ stream, isLocal, isScreen, label }) {
         ref={videoRef}
         autoPlay
         playsInline
-        muted={isLocal}
+        muted={isLocal && !isScreen} // Only mute local camera, not local screen (so you can hear your screen audio)
         className="w-full h-full object-contain bg-black"
       />
       <div className="absolute bottom-2 left-2 bg-black bg-opacity-70 text-white px-3 py-1 rounded text-sm font-semibold">
         {label || (isScreen ? 'Screen' : 'Video')}
       </div>
+      
+      {/* Audio indicator */}
+      {stream && stream.getAudioTracks().length > 0 && (
+        <div className="absolute top-2 right-2 bg-green-600 bg-opacity-70 text-white px-2 py-1 rounded text-xs font-semibold flex items-center gap-1">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 1C12 1 10 3 10 6V12C10 15 12 17 12 17M12 17C12 17 14 15 14 12V6C14 3 12 1 12 1M12 17V21M8 21H16M19 10V12C19 15.866 15.866 19 12 19C8.13401 19 5 15.866 5 12V10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          Audio
+        </div>
+      )}
     </div>
   )
 }

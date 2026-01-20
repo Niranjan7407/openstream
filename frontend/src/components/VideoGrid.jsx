@@ -13,12 +13,15 @@ export default function VideoGrid({ localStream, screenStream, peers, isScreenSh
     .map((peer) => ({ stream: peer.screenStream, userId: peer.userId }))
 
   const totalParticipants = (localStream ? 1 : 0) + cameraStreams.length
+  const totalScreenShares = (screenStream ? 1 : 0) + screenStreams.length
 
   console.log('VideoGrid render:', {
     hasLocalStream: !!localStream,
+    hasLocalScreenStream: !!screenStream,
     cameraStreams: cameraStreams.length,
     screenStreams: screenStreams.length,
     totalParticipants,
+    totalScreenShares,
     peers: peers.length
   })
 
@@ -36,7 +39,7 @@ export default function VideoGrid({ localStream, screenStream, peers, isScreenSh
         >
           Camera ({totalParticipants})
         </button>
-        {isScreenSharing && screenStreams.length > 0 && (
+        {totalScreenShares > 0 && (
           <button
             onClick={() => setActiveTab('screen')}
             className={`px-4 py-2 rounded-lg font-semibold transition ${
@@ -45,7 +48,7 @@ export default function VideoGrid({ localStream, screenStream, peers, isScreenSh
                 : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
             }`}
           >
-            Screen Share ({screenStreams.length})
+            Screen Share ({totalScreenShares})
           </button>
         )}
       </div>
@@ -89,14 +92,32 @@ export default function VideoGrid({ localStream, screenStream, peers, isScreenSh
             </>
           ) : (
             <>
-              {screenStream && <VideoStream stream={screenStream} isLocal={true} isScreen={true} label="Your Screen" />}
-              {screenStreams.length > 0 ? (
+              {/* Show local screen share first if available */}
+              {screenStream && (
+                <VideoStream 
+                  stream={screenStream} 
+                  isLocal={true} 
+                  isScreen={true} 
+                  label="Your Screen" 
+                />
+              )}
+              
+              {/* Show other participants' screen shares */}
+              {screenStreams.length > 0 && (
                 screenStreams.map((peer) => (
-                  <VideoStream key={`screen-${peer.userId}`} stream={peer.stream} isLocal={false} isScreen={true} label={`Participant Screen`} />
+                  <VideoStream 
+                    key={`screen-${peer.userId}`} 
+                    stream={peer.stream} 
+                    isLocal={false} 
+                    isScreen={true} 
+                    label={`Participant Screen`} 
+                  />
                 ))
-              ) : (
+              )}
+              
+              {!screenStream && screenStreams.length === 0 && (
                 <div className="col-span-full flex items-center justify-center text-gray-400">
-                  <p>No other screen shares available</p>
+                  <p>No screen shares available</p>
                 </div>
               )}
             </>
