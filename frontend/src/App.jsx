@@ -1,12 +1,33 @@
+import { useState } from 'react'
+import HomePage from './pages/HomePage'
+import RoomPage from './pages/RoomPage'
 
 function App() {
+  const [currentPage, setCurrentPage] = useState('home')
+  const [roomCode, setRoomCode] = useState(null)
 
+  const handleCreateRoom = (code) => {
+    setRoomCode(code)
+    setCurrentPage('room')
+  }
+
+  const handleJoinRoom = (code) => {
+    setRoomCode(code)
+    setCurrentPage('room')
+  }
+
+  const handleLeaveRoom = () => {
+    setCurrentPage('home')
+    setRoomCode(null)
+  }
 
   return (
     <>
-      <div className="min-h-screen min-w-screen bg-gradient-to-tr from-purple-500 via-pink-500 to-red-500 flex  justify-center">
-        <h1 className="font-bold text-white text-4xl pt-10">OpenStream</h1>
-      </div>
+      {currentPage === 'home' ? (
+        <HomePage onCreateRoom={handleCreateRoom} onJoinRoom={handleJoinRoom} />
+      ) : (
+        <RoomPage roomCode={roomCode} onLeaveRoom={handleLeaveRoom} />
+      )}
     </>
   )
 }
