@@ -9,7 +9,7 @@ const server = http.createServer(app)
 // Allow multiple origins for production and development
 const allowedOrigins = [
   'http://localhost:5173',
-  process.env.FRONTEND_URL || 'https://your-app.vercel.app'
+  process.env.FRONTEND_URL || "https://openstream-psi.vercel.app/"
 ]
 
 const io = socketIO(server, {
@@ -57,19 +57,34 @@ io.on('connection', (socket) => {
     if (!rooms.has(roomCode)) {
       rooms.set(roomCode, new Set())
     }
+
+    // Get existing users in room BEFORE adding new user
+    const existingUsers = Array.from(rooms.get(roomCode))
+    
+    // Add new user to room
     rooms.get(roomCode).add(socket.id)
 
-    socket.to(roomCode).emit('user-joined', { userId: socket.id })
+    console.log(`User ${socket.id} joined room ${roomCode}`)
+    console.log(`Room ${roomCode} now has ${rooms.get(roomCode).size} users`)
 
-    const existingUsers = Array.from(rooms.get(roomCode)).filter((id) => id !== socket.id)
+    // Notify existing users about the new user joining
+    // They should initiate the connection
+    existingUsers.forEach((existingUserId) => {
+      io.to(existingUserId).emit('user-joined', { userId: socket.id })
+    })
+
+    // Send list of existing users to the new user
+    // The new user should initiate connections to them
     socket.emit('existing-users', { users: existingUsers })
   })
 
   socket.on('send-offer', ({ to, offer }) => {
+    console.log(`Offer from ${socket.id} to ${to}`)
     io.to(to).emit('receive-offer', { from: socket.id, offer })
   })
 
   socket.on('send-answer', ({ to, answer }) => {
+    console.log(`Answer from ${socket.id} to ${to}`)
     io.to(to).emit('receive-answer', { from: socket.id, answer })
   })
 
@@ -88,6 +103,7 @@ io.on('connection', (socket) => {
       }
     }
     users.delete(socket.id)
+    console.log(`User ${socket.id} left room ${roomCode}`)
   })
 
   socket.on('disconnect', () => {
