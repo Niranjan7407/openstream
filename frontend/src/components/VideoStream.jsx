@@ -1,7 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState, forwardRef } from 'react'
+import { Maximize, Minimize } from 'lucide-react'
 
-export default function VideoStream({ stream, isLocal, isScreen, label }) {
+const VideoStream = forwardRef(function VideoStream({ stream, isLocal, isScreen, label, onMaximize, isMaximized }, ref) {
   const videoRef = useRef(null)
+  const containerRef = useRef(null)
+  const [isHovering, setIsHovering] = useState(false)
 
   useEffect(() => {
     if (videoRef.current && stream) {
@@ -29,8 +32,28 @@ export default function VideoStream({ stream, isLocal, isScreen, label }) {
     }
   }, [stream, isLocal, isScreen, label])
 
+  const handleMaximize = () => {
+    if (onMaximize) {
+      onMaximize()
+    }
+  }
+
+  const setCombinedRef = (node) => {
+    containerRef.current = node
+    if (typeof ref === 'function') {
+      ref(node)
+    } else if (ref) {
+      ref.current = node
+    }
+  }
+
   return (
-    <div className="relative bg-black rounded-lg overflow-hidden shadow-lg aspect-video">
+    <div 
+      className={`relative bg-black rounded-lg overflow-hidden shadow-lg ${isMaximized ? 'w-full h-full' : 'aspect-video'}`}
+      onMouseEnter={() => setIsHovering(true)}
+      onMouseLeave={() => setIsHovering(false)}
+      ref={setCombinedRef}
+    >
       <video
         ref={videoRef}
         autoPlay
@@ -38,6 +61,18 @@ export default function VideoStream({ stream, isLocal, isScreen, label }) {
         muted={isLocal && !isScreen} // Only mute local camera, not local screen (so you can hear your screen audio)
         className="w-full h-full object-contain bg-black"
       />
+      
+      {/* Maximize/Minimize Button - Shows on hover */}
+      {onMaximize && isHovering && (
+        <button
+          onClick={handleMaximize}
+          className="absolute top-4 right-4 bg-black bg-opacity-70 hover:bg-opacity-90 text-white p-2 rounded-lg transition z-10"
+          title={isMaximized ? 'Exit fullscreen' : 'Maximize'}
+        >
+          {isMaximized ? <Minimize size={24} /> : <Maximize size={24} />}
+        </button>
+      )}
+      
       <div className="absolute bottom-2 left-2 bg-black bg-opacity-70 text-white px-3 py-1 rounded text-sm font-semibold">
         {label || (isScreen ? 'Screen' : 'Video')}
       </div>
@@ -53,4 +88,6 @@ export default function VideoStream({ stream, isLocal, isScreen, label }) {
       )}
     </div>
   )
-}
+})
+
+export default VideoStream

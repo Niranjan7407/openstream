@@ -386,6 +386,7 @@ export default function RoomPage({ roomCode, onLeaveRoom }) {
               echoCancellation: true,
               noiseSuppression: true,
               autoGainControl: true,
+              sampleRate: 48000,
             },
           })
           localStreamRef.current = stream
@@ -396,8 +397,8 @@ export default function RoomPage({ roomCode, onLeaveRoom }) {
             const peerConnection = peerConnectionsRef.current[userId]
             stream.getTracks().forEach((track) => {
               try {
-                peerConnection.addTrack(track, stream)
-                console.log(`Added ${track.kind} track to ${userId}`)
+                const sender = peerConnection.addTrack(track, stream)
+                console.log(`Added ${track.kind} track to ${userId}`, sender)
               } catch (e) {
                 console.error(`Error adding track to ${userId}:`, e)
               }
@@ -411,8 +412,34 @@ export default function RoomPage({ roomCode, onLeaveRoom }) {
             }
           }
         } else {
+          // Check if we need to add a new audio track
           const audioTrack = localStreamRef.current.getAudioTracks()[0]
-          if (audioTrack) {
+          if (!audioTrack) {
+            // No audio track exists, get new audio track
+            const audioStream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                sampleRate: 48000,
+              }
+            })
+            const newAudioTrack = audioStream.getAudioTracks()[0]
+            localStreamRef.current.addTrack(newAudioTrack)
+            setLocalStream(new MediaStream([...localStreamRef.current.getTracks()]))
+            
+            // Add to all peer connections
+            for (const userId in peerConnectionsRef.current) {
+              const peerConnection = peerConnectionsRef.current[userId]
+              peerConnection.addTrack(newAudioTrack, localStreamRef.current)
+              
+              if (peerConnection.signalingState === 'stable') {
+                const offer = await peerConnection.createOffer()
+                await peerConnection.setLocalDescription(offer)
+                socketRef.current.emit('send-offer', { to: userId, offer })
+              }
+            }
+          } else {
             audioTrack.enabled = true
           }
         }
