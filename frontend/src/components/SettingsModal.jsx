@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { X, Settings, Mic, Monitor, Sparkles, HelpCircle } from 'lucide-react'
+import { X, Settings, Mic, Monitor, Sparkles, HelpCircle, Volume2 } from 'lucide-react'
 import { STREAM_QUALITIES } from '../utils/webrtcUtils'
 
 export default function SettingsModal({
@@ -9,6 +9,8 @@ export default function SettingsModal({
   onQualityChange,
   audioProcessing,
   onAudioProcessingChange,
+  screenAudioDevice,
+  onScreenAudioDeviceChange,
 }) {
   const [devices, setDevices] = useState({ audioInputs: [], videoInputs: [] })
   const [selectedAudioInput, setSelectedAudioInput] = useState('')
@@ -39,10 +41,10 @@ export default function SettingsModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-fadeIn">
       <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="p-5 border-b border-gray-800 flex items-center justify-between bg-gray-950">
-          <div className="flex items-center gap-2.5 text-white font-bold text-lg">
+        <div className="p-4 sm:p-5 border-b border-gray-800 flex items-center justify-between bg-gray-950">
+          <div className="flex items-center gap-2.5 text-white font-bold text-base sm:text-lg">
             <Settings size={20} className="text-purple-400" />
-            <span>Settings & Quality</span>
+            <span>Settings & Stream Quality</span>
           </div>
           <button
             onClick={onClose}
@@ -53,21 +55,21 @@ export default function SettingsModal({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-gray-800 bg-gray-950/50 px-5 gap-4">
+        <div className="flex border-b border-gray-800 bg-gray-950/50 px-4 sm:px-5 gap-3 sm:gap-4 overflow-x-auto">
           <button
             onClick={() => setActiveTab('stream')}
-            className={`py-3 text-sm font-semibold border-b-2 transition flex items-center gap-2 ${
+            className={`py-3 text-xs sm:text-sm font-semibold border-b-2 transition flex items-center gap-1.5 sm:gap-2 shrink-0 ${
               activeTab === 'stream'
                 ? 'border-purple-500 text-purple-400'
                 : 'border-transparent text-gray-400 hover:text-gray-200'
             }`}
           >
             <Monitor size={16} />
-            <span>Screen Quality</span>
+            <span>Screen & Quality</span>
           </button>
           <button
             onClick={() => setActiveTab('audio')}
-            className={`py-3 text-sm font-semibold border-b-2 transition flex items-center gap-2 ${
+            className={`py-3 text-xs sm:text-sm font-semibold border-b-2 transition flex items-center gap-1.5 sm:gap-2 shrink-0 ${
               activeTab === 'audio'
                 ? 'border-purple-500 text-purple-400'
                 : 'border-transparent text-gray-400 hover:text-gray-200'
@@ -78,7 +80,7 @@ export default function SettingsModal({
           </button>
           <button
             onClick={() => setActiveTab('shortcuts')}
-            className={`py-3 text-sm font-semibold border-b-2 transition flex items-center gap-2 ${
+            className={`py-3 text-xs sm:text-sm font-semibold border-b-2 transition flex items-center gap-1.5 sm:gap-2 shrink-0 ${
               activeTab === 'shortcuts'
                 ? 'border-purple-500 text-purple-400'
                 : 'border-transparent text-gray-400 hover:text-gray-200'
@@ -90,42 +92,42 @@ export default function SettingsModal({
         </div>
 
         {/* Content Body */}
-        <div className="p-6 overflow-y-auto space-y-6 flex-1 text-gray-200 text-sm">
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1 text-gray-200 text-sm">
           {activeTab === 'stream' && (
             <div className="space-y-4">
               <div>
                 <h3 className="text-white font-semibold mb-1 flex items-center gap-2">
                   <Sparkles size={16} className="text-purple-400" />
-                  Screen Share Streaming Preset (No Nitro Limit)
+                  Streaming Quality Preset (No Quality Drop / Locked Bitrate)
                 </h3>
                 <p className="text-gray-400 text-xs mb-3">
-                  Choose your resolution and framerate. Unlike Discord, 1080p 60fps and higher are completely free and unthrottled!
+                  Resolution and bitrates are strictly locked so your stream never automatically degrades.
                 </p>
               </div>
 
-              <div className="grid gap-3">
+              <div className="grid gap-2.5">
                 {Object.entries(STREAM_QUALITIES).map(([key, item]) => {
                   const isSelected = selectedQuality === key
                   return (
                     <label
                       key={key}
                       onClick={() => onQualityChange(key)}
-                      className={`p-3.5 rounded-xl border flex items-center justify-between cursor-pointer transition ${
+                      className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition ${
                         isSelected
                           ? 'border-purple-500 bg-purple-950/40 text-white'
                           : 'border-gray-800 bg-gray-950/60 hover:border-gray-700 text-gray-300'
                       }`}
                     >
                       <div className="space-y-0.5">
-                        <div className="font-semibold text-sm flex items-center gap-2">
+                        <div className="font-semibold text-xs sm:text-sm flex items-center gap-2">
                           <span>{item.label}</span>
                           {key === '1080p60' && (
-                            <span className="bg-purple-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">
+                            <span className="bg-purple-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">
                               Recommended
                             </span>
                           )}
                         </div>
-                        <div className="text-xs text-gray-400">{item.description}</div>
+                        <div className="text-[11px] sm:text-xs text-gray-400">{item.description}</div>
                       </div>
                       <input
                         type="radio"
@@ -139,9 +141,34 @@ export default function SettingsModal({
                 })}
               </div>
 
+              {/* Dedicated Screen Audio Source Selector */}
+              <div className="bg-gray-950/70 border border-gray-800 rounded-xl p-3.5 space-y-2 mt-4">
+                <div className="flex items-center gap-2 text-white font-semibold text-xs sm:text-sm">
+                  <Volume2 size={16} className="text-purple-400" />
+                  <span>Entire Screen / Game Audio Source</span>
+                </div>
+                <p className="text-xs text-gray-400">
+                  If Chrome does not capture audio when sharing your Entire Screen (especially on Linux/Windows), select your desktop loopback audio device below (e.g. "Monitor of Built-in Audio", "Stereo Mix", or Virtual Cable).
+                </p>
+
+                <select
+                  value={screenAudioDevice || ''}
+                  onChange={(e) => onScreenAudioDeviceChange && onScreenAudioDeviceChange(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs sm:text-sm focus:outline-none focus:border-purple-500"
+                >
+                  <option value="">Browser Default (System / Tab Audio)</option>
+                  {devices.audioInputs.map((d) => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label || `Audio Device ${d.deviceId.slice(0, 5)}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="bg-blue-950/40 border border-blue-900/60 rounded-xl p-3 text-xs text-blue-300 space-y-1">
-                <p className="font-semibold">💡 Tips for Best Screen Audio:</p>
-                <p>When starting screen share in Chrome/Edge, make sure to check "Share system audio" or "Also share tab audio" in the browser share dialog to include game/music audio.</p>
+                <p className="font-semibold">💡 Tips for Entire Screen Game Audio:</p>
+                <p>1. When the Chrome share dialog opens, tick <strong>"Also share system audio"</strong>.</p>
+                <p>2. If on Linux or sharing a separate game, select your <strong>Monitor/Stereo Mix</strong> device above to broadcast 100% of game audio!</p>
               </div>
             </div>
           )}
@@ -248,30 +275,30 @@ export default function SettingsModal({
                 <p className="text-gray-400 text-xs">Quick controls for seamless streaming like Discord.</p>
               </div>
 
-              <div className="bg-gray-950/60 border border-gray-800 rounded-xl overflow-hidden divide-y divide-gray-800">
+              <div className="bg-gray-950/60 border border-gray-800 rounded-xl overflow-hidden divide-y divide-gray-800 text-xs sm:text-sm">
                 <div className="p-3 flex items-center justify-between">
                   <span>Toggle Microphone (Mute / Unmute)</span>
-                  <kbd className="bg-gray-800 px-2.5 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">M</kbd>
+                  <kbd className="bg-gray-800 px-2 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">M</kbd>
                 </div>
                 <div className="p-3 flex items-center justify-between">
                   <span>Toggle Camera (On / Off)</span>
-                  <kbd className="bg-gray-800 px-2.5 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">V</kbd>
+                  <kbd className="bg-gray-800 px-2 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">V</kbd>
                 </div>
                 <div className="p-3 flex items-center justify-between">
                   <span>Toggle Screen Share</span>
-                  <kbd className="bg-gray-800 px-2.5 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">S</kbd>
+                  <kbd className="bg-gray-800 px-2 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">S</kbd>
                 </div>
                 <div className="p-3 flex items-center justify-between">
                   <span>Toggle Fullscreen (Stream / Stage)</span>
-                  <kbd className="bg-gray-800 px-2.5 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">F</kbd>
+                  <kbd className="bg-gray-800 px-2 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">F</kbd>
                 </div>
                 <div className="p-3 flex items-center justify-between">
                   <span>Toggle In-Call Chat</span>
-                  <kbd className="bg-gray-800 px-2.5 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">C</kbd>
+                  <kbd className="bg-gray-800 px-2 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">C</kbd>
                 </div>
                 <div className="p-3 flex items-center justify-between">
                   <span>Exit Fullscreen / Close Modals</span>
-                  <kbd className="bg-gray-800 px-2.5 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">Esc</kbd>
+                  <kbd className="bg-gray-800 px-2 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">Esc</kbd>
                 </div>
               </div>
             </div>
@@ -282,7 +309,7 @@ export default function SettingsModal({
         <div className="p-4 border-t border-gray-800 bg-gray-950 flex justify-end">
           <button
             onClick={onClose}
-            className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-xl transition shadow"
+            className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-xl transition shadow text-sm"
           >
             Done
           </button>

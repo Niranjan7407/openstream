@@ -122,7 +122,7 @@ io.on('connection', (socket) => {
   })
 
   // Broadcast screen sharing status changes
-  socket.on('screen-share-status', ({ roomCode, isSharing, streamId, hasAudio, quality }) => {
+  socket.on('screen-share-status', ({ roomCode, isSharing, streamId, hasAudio, quality, audioTrackId }) => {
     const user = users.get(socket.id)
     if (!roomScreenShares.has(roomCode)) {
       roomScreenShares.set(roomCode, new Map())
@@ -134,6 +134,7 @@ io.on('connection', (socket) => {
         streamId,
         hasAudio: !!hasAudio,
         quality: quality || '1080p60',
+        audioTrackId,
         userName: user?.userName || `User-${socket.id.slice(0, 4)}`,
       })
     } else {
@@ -147,6 +148,7 @@ io.on('connection', (socket) => {
       streamId,
       hasAudio: !!hasAudio,
       quality: quality || '1080p60',
+      audioTrackId,
     })
   })
 

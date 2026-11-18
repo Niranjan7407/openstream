@@ -8,23 +8,17 @@ import SettingsModal from '../components/SettingsModal'
 import { API_URL } from '../config'
 import {
   getHighQualityDisplayMedia,
+  captureAudioDeviceStream,
   applySenderQuality,
-  enhanceSdpForScreenAudio,
+  lockSdpHighBitrate,
+  FAST_ICE_SERVERS,
 } from '../utils/webrtcUtils'
-
-const ICE_SERVERS = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-  ],
-}
 
 export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
   const socketRef = useRef(null)
   const peerConnectionsRef = useRef({}) // userId -> RTCPeerConnection
   const peersRef = useRef({}) // userId -> { userId, userName, stream, screenStream }
-  const peerScreenSharesRef = useRef({}) // userId -> { isSharing, streamId, hasAudio, quality }
+  const peerScreenSharesRef = useRef({}) // userId -> { isSharing, streamId, hasAudio, quality, audioTrackId }
   const pendingCandidatesRef = useRef({}) // userId -> RTCIceCandidateInit[]
 
   const [peers, setPeers] = useState([])
@@ -39,8 +33,9 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
   // Screen share toast / info
   const [screenAudioNotice, setScreenAudioNotice] = useState(null)
 
-  // Quality and Audio Settings
+  // Quality, Desktop Audio & Voice Settings
   const [selectedQuality, setSelectedQuality] = useState('1080p60')
+  const [screenAudioDevice, setScreenAudioDevice] = useState('')
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [audioProcessing, setAudioProcessing] = useState({
     echoCancellation: true,
@@ -60,11 +55,15 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
   const localStreamRef = useRef(null)
   const screenStreamRef = useRef(null)
   const selectedQualityRef = useRef(selectedQuality)
+  const screenAudioDeviceRef = useRef(screenAudioDevice)
 
   useEffect(() => {
     selectedQualityRef.current = selectedQuality
   }, [selectedQuality])
 
+  useEffect(() => {
+    screenAudioDeviceRef.current = screenAudioDevice
+  }, [screenAudioDevice])
 
   // Update React peers state from ref
   const updatePeersUI = useCallback(() => {
@@ -101,8 +100,8 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
           return peerConnectionsRef.current[userId]
         }
 
-        console.log(`Creating RTCPeerConnection with ${userId} (initiator: ${initiator})`)
-        const pc = new RTCPeerConnection(ICE_SERVERS)
+        console.log(`Creating RTCPeerConnection with ${userId} (initiator: ${initiator}) using fast relays`)
+        const pc = new RTCPeerConnection(FAST_ICE_SERVERS)
         peerConnectionsRef.current[userId] = pc
 
         if (!peersRef.current[userId]) {
@@ -163,21 +162,22 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
           const remoteStream = event.streams[0]
           const shareInfo = peerScreenSharesRef.current[userId]
 
-          // Distinguish screen track vs camera/mic track
+          // Robust screen track detection
           let isScreen = false
           if (shareInfo && shareInfo.isSharing) {
             if (remoteStream && shareInfo.streamId && remoteStream.id === shareInfo.streamId) {
               isScreen = true
             } else if (event.track.getSettings && event.track.getSettings().displaySurface !== undefined) {
               isScreen = true
-            } else if (event.track.kind === 'video' && (!peersRef.current[userId].stream || peersRef.current[userId].screenStream)) {
+            } else if (event.track.kind === 'video' && (!peersRef.current[userId]?.stream?.getVideoTracks().length || peersRef.current[userId]?.screenStream)) {
               isScreen = true
-            } else if (event.track.kind === 'audio' && shareInfo.hasAudio && peersRef.current[userId].screenStream) {
+            } else if (event.track.kind === 'audio' && (shareInfo.audioTrackId === event.track.id || (shareInfo.hasAudio && peersRef.current[userId]?.stream?.getAudioTracks().length > 0))) {
+              isScreen = true
+            } else if (event.track.kind === 'audio' && shareInfo.hasAudio && (!peersRef.current[userId]?.stream || remoteStream?.id !== peersRef.current[userId]?.stream?.id)) {
               isScreen = true
             }
           }
 
-          // Fallback heuristic
           if (!isScreen && event.track.label) {
             const lbl = event.track.label.toLowerCase()
             if (lbl.includes('screen') || lbl.includes('display') || lbl.includes('window') || lbl.includes('monitor')) {
@@ -228,7 +228,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
               offerToReceiveAudio: true,
               offerToReceiveVideo: true,
             })
-            offer.sdp = enhanceSdpForScreenAudio(offer.sdp)
+            offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
             await pc.setLocalDescription(offer)
             socketRef.current.emit('send-offer', { to: userId, offer })
             console.log(`Sent offer to ${userId}`)
@@ -292,9 +292,9 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
     })
 
     // Peer screen share status update
-    socket.on('peer-screen-share-status', ({ userId, isSharing, streamId, hasAudio, quality }) => {
+    socket.on('peer-screen-share-status', ({ userId, isSharing, streamId, hasAudio, quality, audioTrackId }) => {
       console.log(`Screen share update from ${userId}: isSharing=${isSharing}, hasAudio=${hasAudio}`)
-      peerScreenSharesRef.current[userId] = { isSharing, streamId, hasAudio, quality }
+      peerScreenSharesRef.current[userId] = { isSharing, streamId, hasAudio, quality, audioTrackId }
 
       if (!isSharing && peersRef.current[userId]?.screenStream) {
         peersRef.current[userId].screenStream = null
@@ -317,7 +317,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
             await drainPendingCandidates(from, pc)
 
             const answer = await pc.createAnswer()
-            answer.sdp = enhanceSdpForScreenAudio(answer.sdp)
+            answer.sdp = lockSdpHighBitrate(answer.sdp, 8000)
             await pc.setLocalDescription(answer)
             socket.emit('send-answer', { to: from, answer })
             console.log(`Sent answer to ${from}`)
@@ -416,6 +416,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
             stream.getTracks().forEach((t) => pc.addTrack(t, stream))
             if (pc.signalingState === 'stable') {
               const offer = await pc.createOffer()
+              offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
               await pc.setLocalDescription(offer)
               socketRef.current.emit('send-offer', { to: userId, offer })
             }
@@ -435,19 +436,24 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
               pc.addTrack(videoTrack, localStreamRef.current)
               if (pc.signalingState === 'stable') {
                 const offer = await pc.createOffer()
+                offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
                 await pc.setLocalDescription(offer)
                 socketRef.current.emit('send-offer', { to: userId, offer })
               }
             }
           } else {
             videoTrack.enabled = true
+            setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
           }
         }
         setIsCameraOn(true)
       } else {
         if (localStreamRef.current) {
           const videoTrack = localStreamRef.current.getVideoTracks()[0]
-          if (videoTrack) videoTrack.enabled = false
+          if (videoTrack) {
+            videoTrack.enabled = false
+            setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
+          }
         }
         setIsCameraOn(false)
       }
@@ -479,6 +485,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
             stream.getTracks().forEach((t) => pc.addTrack(t, stream))
             if (pc.signalingState === 'stable') {
               const offer = await pc.createOffer()
+              offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
               await pc.setLocalDescription(offer)
               socketRef.current.emit('send-offer', { to: userId, offer })
             }
@@ -503,19 +510,24 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
               pc.addTrack(audioTrack, localStreamRef.current)
               if (pc.signalingState === 'stable') {
                 const offer = await pc.createOffer()
+                offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
                 await pc.setLocalDescription(offer)
                 socketRef.current.emit('send-offer', { to: userId, offer })
               }
             }
           } else {
             audioTrack.enabled = true
+            setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
           }
         }
         setIsMicOn(true)
       } else {
         if (localStreamRef.current) {
           const audioTrack = localStreamRef.current.getAudioTracks()[0]
-          if (audioTrack) audioTrack.enabled = false
+          if (audioTrack) {
+            audioTrack.enabled = false
+            setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
+          }
         }
         setIsMicOn(false)
       }
@@ -554,6 +566,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
       if (pc.signalingState === 'stable') {
         try {
           const offer = await pc.createOffer()
+          offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
           await pc.setLocalDescription(offer)
           socketRef.current.emit('send-offer', { to: userId, offer })
         } catch (e) {
@@ -567,36 +580,59 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
     setIsScreenSharing(false)
   }, [roomCode])
 
-  // Toggle Screen Share in 1080p 60fps with System Audio
+  // Toggle Screen Share in 1080p 60fps with Desktop / Entire Screen Audio
   const toggleScreenShare = useCallback(async () => {
     try {
       if (!isScreenSharing) {
         const displayStream = await getHighQualityDisplayMedia(selectedQuality)
+
+        // Check if Chrome provided an audio track
+        let hasAudio = displayStream.getAudioTracks().length > 0
+        let audioTrack = displayStream.getAudioTracks()[0]
+
+        // If no audio track provided (e.g. Linux entire screen or unselected in prompt)
+        // Check if user selected an audio input device (like Monitor / Stereo Mix)
+        if (!hasAudio && screenAudioDeviceRef.current) {
+          try {
+            const secondaryStream = await captureAudioDeviceStream(screenAudioDeviceRef.current)
+            const secAudioTrack = secondaryStream.getAudioTracks()[0]
+            if (secAudioTrack) {
+              displayStream.addTrack(secAudioTrack)
+              hasAudio = true
+              audioTrack = secAudioTrack
+              console.log('Attached desktop/game audio device to screen share')
+            }
+          } catch (audioErr) {
+            console.warn('Could not attach desktop audio device:', audioErr)
+          }
+        }
+
         screenStreamRef.current = displayStream
         setScreenStream(displayStream)
 
-        const hasAudio = displayStream.getAudioTracks().length > 0
-        console.log(`Started screen share. Quality: ${selectedQuality}. Audio captured: ${hasAudio}`)
+        console.log(`Started screen share. Quality: ${selectedQuality}. Audio: ${hasAudio}`)
 
         if (hasAudio) {
           setScreenAudioNotice({
             type: 'success',
-            text: 'Screen sharing with 1080p 60fps and system/tab audio enabled!',
+            text: 'Screen sharing with 1080p 60fps and system/game audio live!',
           })
         } else {
           setScreenAudioNotice({
             type: 'info',
-            text: 'Screen sharing without audio. Check "Share system audio" in the share prompt if you want friends to hear your game or music!',
+            text: 'Screen sharing live. (To stream game sound, tick "Share system audio" in prompt or select your Monitor device in Settings).',
           })
         }
-        setTimeout(() => setScreenAudioNotice(null), 6000)
+        setTimeout(() => setScreenAudioNotice(null), 7000)
 
+        // Broadcast screen share status
         socketRef.current.emit('screen-share-status', {
           roomCode,
           isSharing: true,
           streamId: displayStream.id,
           hasAudio,
           quality: selectedQuality,
+          audioTrackId: audioTrack?.id,
         })
 
         for (const userId in peerConnectionsRef.current) {
@@ -610,7 +646,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
 
           if (pc.signalingState === 'stable') {
             const offer = await pc.createOffer()
-            offer.sdp = enhanceSdpForScreenAudio(offer.sdp)
+            offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
             await pc.setLocalDescription(offer)
             socketRef.current.emit('send-offer', { to: userId, offer })
           }
@@ -695,10 +731,10 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
       {/* Top Notification / Audio Banner */}
       {screenAudioNotice && (
         <div
-          className={`absolute top-4 left-1/2 transform -translate-x-1/2 z-40 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold shadow-2xl transition-all border ${
+          className={`absolute top-3 left-1/2 transform -translate-x-1/2 z-40 max-w-md mx-4 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold shadow-2xl transition-all border ${
             screenAudioNotice.type === 'success'
-              ? 'bg-emerald-950/90 text-emerald-300 border-emerald-700'
-              : 'bg-blue-950/90 text-blue-300 border-blue-700'
+              ? 'bg-emerald-950/95 text-emerald-300 border-emerald-700'
+              : 'bg-blue-950/95 text-blue-300 border-blue-700'
           }`}
         >
           {screenAudioNotice.text}
@@ -714,7 +750,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
 
       {/* Connection Status Pill (Top Right) */}
       <div
-        className={`absolute top-3 right-3 z-30 px-2.5 py-1 rounded-full text-xs font-bold shadow flex items-center gap-1.5 backdrop-blur-md ${
+        className={`absolute top-2.5 right-2.5 z-30 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full text-[10px] sm:text-xs font-bold shadow flex items-center gap-1.5 backdrop-blur-md ${
           connectionStatus === 'connected'
             ? 'bg-emerald-900/80 text-emerald-300 border border-emerald-600/40'
             : connectionStatus === 'connecting'
@@ -723,7 +759,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         }`}
       >
         <span
-          className={`w-2 h-2 rounded-full ${
+          className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${
             connectionStatus === 'connected'
               ? 'bg-emerald-400'
               : connectionStatus === 'connecting'
@@ -792,6 +828,8 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         onAudioProcessingChange={(field, val) =>
           setAudioProcessing((prev) => ({ ...prev, [field]: val }))
         }
+        screenAudioDevice={screenAudioDevice}
+        onScreenAudioDeviceChange={setScreenAudioDevice}
       />
     </div>
   )

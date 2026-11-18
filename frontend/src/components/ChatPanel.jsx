@@ -24,16 +24,16 @@ export default function ChatPanel({ isOpen, onClose, messages, onSendMessage, cu
   if (!isOpen) return null
 
   return (
-    <div className="w-80 md:w-96 bg-gray-900 border-l border-gray-800 flex flex-col h-full z-30 shadow-2xl transition-all">
+    <div className="absolute sm:relative inset-y-0 right-0 w-full sm:w-80 md:w-96 bg-gray-900 border-l border-gray-800 flex flex-col h-full z-40 shadow-2xl transition-all">
       {/* Header */}
-      <div className="p-4 border-b border-gray-800 flex items-center justify-between bg-gray-950">
-        <div className="flex items-center gap-2 text-white font-semibold">
+      <div className="p-3.5 sm:p-4 border-b border-gray-800 flex items-center justify-between bg-gray-950">
+        <div className="flex items-center gap-2 text-white font-semibold text-sm sm:text-base">
           <MessageSquare size={18} className="text-purple-400" />
           <span>In-Call Chat</span>
         </div>
         <button
           onClick={onClose}
-          className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800 transition"
+          className="text-gray-400 hover:text-white p-1.5 rounded-lg hover:bg-gray-800 transition"
           title="Close chat"
         >
           <X size={18} />
@@ -41,7 +41,7 @@ export default function ChatPanel({ isOpen, onClose, messages, onSendMessage, cu
       </div>
 
       {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3">
         {messages.length === 0 ? (
           <div className="text-center text-gray-500 mt-12 text-sm">
             <MessageSquare size={32} className="mx-auto mb-2 opacity-40 text-purple-400" />
