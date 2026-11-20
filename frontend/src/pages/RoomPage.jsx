@@ -21,6 +21,10 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
   const peerScreenSharesRef = useRef({}) // userId -> { isSharing, streamId, hasAudio, quality, audioTrackId }
   const pendingCandidatesRef = useRef({}) // userId -> RTCIceCandidateInit[]
 
+  // Perfect Negotiation tracking
+  const makingOfferRef = useRef({}) // userId -> boolean
+  const ignoreOfferRef = useRef({}) // userId -> boolean
+
   const [peers, setPeers] = useState([])
   const [localStream, setLocalStream] = useState(null)
   const [screenStream, setScreenStream] = useState(null)
@@ -33,14 +37,30 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
   // Screen share toast / info
   const [screenAudioNotice, setScreenAudioNotice] = useState(null)
 
-  // Quality, Desktop Audio & Voice Settings
+  // Quality, Desktop Audio & Voice Settings with LocalStorage persistence
   const [selectedQuality, setSelectedQuality] = useState('1080p60')
   const [screenAudioDevice, setScreenAudioDevice] = useState('')
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
-  const [audioProcessing, setAudioProcessing] = useState({
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
+
+  const [audioProcessing, setAudioProcessing] = useState(() => {
+    try {
+      const saved = localStorage.getItem('openstream_audio_processing')
+      if (saved) return JSON.parse(saved)
+    } catch (e) {
+      console.warn('Failed to parse saved audio processing settings:', e)
+    }
+    return {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    }
+  })
+
+  const [selectedAudioInput, setSelectedAudioInput] = useState(() => {
+    return localStorage.getItem('openstream_audio_device') || ''
+  })
+  const [selectedVideoInput, setSelectedVideoInput] = useState(() => {
+    return localStorage.getItem('openstream_video_device') || ''
   })
 
   // Volumes
@@ -56,6 +76,9 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
   const screenStreamRef = useRef(null)
   const selectedQualityRef = useRef(selectedQuality)
   const screenAudioDeviceRef = useRef(screenAudioDevice)
+  const audioProcessingRef = useRef(audioProcessing)
+  const selectedAudioInputRef = useRef(selectedAudioInput)
+  const selectedVideoInputRef = useRef(selectedVideoInput)
 
   useEffect(() => {
     selectedQualityRef.current = selectedQuality
@@ -65,7 +88,30 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
     screenAudioDeviceRef.current = screenAudioDevice
   }, [screenAudioDevice])
 
-  // Update React peers state from ref
+  useEffect(() => {
+    audioProcessingRef.current = audioProcessing
+    try {
+      localStorage.setItem('openstream_audio_processing', JSON.stringify(audioProcessing))
+    } catch (e) {
+      console.warn('Failed to save audio processing settings:', e)
+    }
+  }, [audioProcessing])
+
+  useEffect(() => {
+    selectedAudioInputRef.current = selectedAudioInput
+    if (selectedAudioInput) {
+      localStorage.setItem('openstream_audio_device', selectedAudioInput)
+    }
+  }, [selectedAudioInput])
+
+  useEffect(() => {
+    selectedVideoInputRef.current = selectedVideoInput
+    if (selectedVideoInput) {
+      localStorage.setItem('openstream_video_device', selectedVideoInput)
+    }
+  }, [selectedVideoInput])
+
+  // Update React peers state from ref with clone so React always re-renders
   const updatePeersUI = useCallback(() => {
     const list = Object.values(peersRef.current).map((p) => ({
       userId: p.userId,
@@ -79,6 +125,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
   // Drain pending ICE candidates once remote description is set
   const drainPendingCandidates = async (userId, pc) => {
     const queue = pendingCandidatesRef.current[userId] || []
+    pendingCandidatesRef.current[userId] = []
     if (queue.length > 0) {
       console.log(`Draining ${queue.length} pending ICE candidates for ${userId}`)
       for (const candidate of queue) {
@@ -88,9 +135,37 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
           console.warn(`Error adding queued candidate for ${userId}:`, e)
         }
       }
-      pendingCandidatesRef.current[userId] = []
     }
   }
+
+  // Renegotiate a specific peer safely with Perfect Negotiation
+  const renegotiatePeer = useCallback(async (userId) => {
+    const pc = peerConnectionsRef.current[userId]
+    if (!pc) return
+
+    try {
+      makingOfferRef.current[userId] = true
+      const offer = await pc.createOffer()
+      if (pc.signalingState !== 'stable') return
+
+      offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
+      await pc.setLocalDescription(offer)
+      if (socketRef.current) {
+        socketRef.current.emit('send-offer', { to: userId, offer: pc.localDescription })
+      }
+    } catch (err) {
+      console.error(`Error in renegotiatePeer for ${userId}:`, err)
+    } finally {
+      makingOfferRef.current[userId] = false
+    }
+  }, [])
+
+  // Renegotiate all connected peers
+  const renegotiateAllPeers = useCallback(async () => {
+    for (const userId in peerConnectionsRef.current) {
+      await renegotiatePeer(userId)
+    }
+  }, [renegotiatePeer])
 
   // Create WebRTC peer connection
   const createPeerConnection = useCallback(
@@ -100,9 +175,11 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
           return peerConnectionsRef.current[userId]
         }
 
-        console.log(`Creating RTCPeerConnection with ${userId} (initiator: ${initiator}) using fast relays`)
+        console.log(`Creating RTCPeerConnection with ${userId} (initiator: ${initiator})`)
         const pc = new RTCPeerConnection(FAST_ICE_SERVERS)
         peerConnectionsRef.current[userId] = pc
+        makingOfferRef.current[userId] = false
+        ignoreOfferRef.current[userId] = false
 
         if (!peersRef.current[userId]) {
           peersRef.current[userId] = {
@@ -132,7 +209,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
           })
         }
 
-        // ICE candidates
+        // Send ICE candidates to remote peer
         pc.onicecandidate = (event) => {
           if (event.candidate && socketRef.current) {
             socketRef.current.emit('send-ice-candidate', {
@@ -142,7 +219,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
           }
         }
 
-        // ICE restart on failure
+        // Connection state monitoring
         pc.onconnectionstatechange = () => {
           console.log(`Connection state with ${userId}: ${pc.connectionState}`)
           if (pc.connectionState === 'failed') {
@@ -152,6 +229,8 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
             delete peerConnectionsRef.current[userId]
             delete peersRef.current[userId]
             delete pendingCandidatesRef.current[userId]
+            delete makingOfferRef.current[userId]
+            delete ignoreOfferRef.current[userId]
             updatePeersUI()
           }
         }
@@ -162,18 +241,23 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
           const remoteStream = event.streams[0]
           const shareInfo = peerScreenSharesRef.current[userId]
 
-          // Robust screen track detection
+          // Detect screen share track accurately
           let isScreen = false
           if (shareInfo && shareInfo.isSharing) {
             if (remoteStream && shareInfo.streamId && remoteStream.id === shareInfo.streamId) {
               isScreen = true
-            } else if (event.track.getSettings && event.track.getSettings().displaySurface !== undefined) {
+            } else if (shareInfo.audioTrackId && shareInfo.audioTrackId === event.track.id) {
               isScreen = true
-            } else if (event.track.kind === 'video' && (!peersRef.current[userId]?.stream?.getVideoTracks().length || peersRef.current[userId]?.screenStream)) {
+            } else if (
+              event.track.kind === 'video' &&
+              (!peersRef.current[userId]?.stream?.getVideoTracks().length || peersRef.current[userId]?.screenStream)
+            ) {
               isScreen = true
-            } else if (event.track.kind === 'audio' && (shareInfo.audioTrackId === event.track.id || (shareInfo.hasAudio && peersRef.current[userId]?.stream?.getAudioTracks().length > 0))) {
-              isScreen = true
-            } else if (event.track.kind === 'audio' && shareInfo.hasAudio && (!peersRef.current[userId]?.stream || remoteStream?.id !== peersRef.current[userId]?.stream?.id)) {
+            } else if (
+              event.track.kind === 'audio' &&
+              shareInfo.hasAudio &&
+              (!peersRef.current[userId]?.stream || remoteStream?.id !== peersRef.current[userId]?.stream?.id)
+            ) {
               isScreen = true
             }
           }
@@ -195,45 +279,40 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
           }
 
           if (isScreen) {
-            // Track belongs to Screen Share
-            if (!peersRef.current[userId].screenStream) {
-              peersRef.current[userId].screenStream = new MediaStream()
-            }
-            const scrStream = peersRef.current[userId].screenStream
-            scrStream.getTracks().forEach((t) => {
-              if (t.kind === event.track.kind) scrStream.removeTrack(t)
-            })
-            scrStream.addTrack(event.track)
+            // Track belongs to Screen Share: Create new MediaStream reference so React state detects update
+            const currentTracks = peersRef.current[userId].screenStream
+              ? peersRef.current[userId].screenStream.getTracks().filter((t) => t.kind !== event.track.kind)
+              : []
+            peersRef.current[userId].screenStream = new MediaStream([...currentTracks, event.track])
             console.log(`Attached ${event.track.kind} track to screenStream for ${userId}`)
           } else {
-            // Track belongs to Camera / Microphone
-            if (!peersRef.current[userId].stream) {
-              peersRef.current[userId].stream = new MediaStream()
-            }
-            const camStream = peersRef.current[userId].stream
-            camStream.getTracks().forEach((t) => {
-              if (t.kind === event.track.kind) camStream.removeTrack(t)
-            })
-            camStream.addTrack(event.track)
+            // Track belongs to Camera / Microphone: Create new MediaStream reference so React state detects update
+            const currentTracks = peersRef.current[userId].stream
+              ? peersRef.current[userId].stream.getTracks().filter((t) => t.kind !== event.track.kind)
+              : []
+            peersRef.current[userId].stream = new MediaStream([...currentTracks, event.track])
             console.log(`Attached ${event.track.kind} track to camera/mic stream for ${userId}`)
           }
 
           updatePeersUI()
         }
 
-        // Initiator creates offer
+        // Initiator creates initial offer
         if (initiator) {
           try {
+            makingOfferRef.current[userId] = true
             const offer = await pc.createOffer({
               offerToReceiveAudio: true,
               offerToReceiveVideo: true,
             })
             offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
             await pc.setLocalDescription(offer)
-            socketRef.current.emit('send-offer', { to: userId, offer })
-            console.log(`Sent offer to ${userId}`)
+            socketRef.current.emit('send-offer', { to: userId, offer: pc.localDescription })
+            console.log(`Sent initial offer to ${userId}`)
           } catch (offerErr) {
-            console.error(`Error creating offer for ${userId}:`, offerErr)
+            console.error(`Error creating initial offer for ${userId}:`, offerErr)
+          } finally {
+            makingOfferRef.current[userId] = false
           }
         }
 
@@ -253,7 +332,6 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
       reconnectionAttempts: 10,
-      withCredentials: true,
     })
     socketRef.current = socket
 
@@ -302,7 +380,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
       }
     })
 
-    // Receive Offer
+    // Receive Offer with Perfect Negotiation (Glare / Collision Handled)
     socket.on('receive-offer', async ({ from, offer }) => {
       console.log(`Received offer from ${from}`)
       try {
@@ -310,19 +388,32 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         if (!pc) {
           pc = await createPeerConnection(from, false)
         }
+        if (!pc) return
 
-        if (pc) {
-          if (pc.signalingState === 'stable' || pc.signalingState === 'have-remote-offer') {
-            await pc.setRemoteDescription(new RTCSessionDescription(offer))
-            await drainPendingCandidates(from, pc)
+        // Tie-breaker: Deterministic comparison of socket IDs
+        const polite = socket.id.localeCompare(from) > 0
+        const isMakingOffer = makingOfferRef.current[from]
+        const offerCollision = offer.type === 'offer' && (isMakingOffer || pc.signalingState !== 'stable')
 
-            const answer = await pc.createAnswer()
-            answer.sdp = lockSdpHighBitrate(answer.sdp, 8000)
-            await pc.setLocalDescription(answer)
-            socket.emit('send-answer', { to: from, answer })
-            console.log(`Sent answer to ${from}`)
-          }
+        ignoreOfferRef.current[from] = !polite && offerCollision
+        if (ignoreOfferRef.current[from]) {
+          console.log(`Ignoring offer collision from ${from} (impolite)`)
+          return
         }
+
+        if (offerCollision) {
+          console.log(`Rolling back local offer for ${from} (polite)`)
+          await pc.setLocalDescription({ type: 'rollback' })
+        }
+
+        await pc.setRemoteDescription(new RTCSessionDescription(offer))
+        await drainPendingCandidates(from, pc)
+
+        const answer = await pc.createAnswer()
+        answer.sdp = lockSdpHighBitrate(answer.sdp, 8000)
+        await pc.setLocalDescription(answer)
+        socket.emit('send-answer', { to: from, answer: pc.localDescription })
+        console.log(`Sent answer to ${from}`)
       } catch (err) {
         console.error(`Error handling offer from ${from}:`, err)
       }
@@ -356,7 +447,9 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
           pendingCandidatesRef.current[from].push(candidate)
         }
       } catch (err) {
-        console.error(`Error adding ICE candidate from ${from}:`, err)
+        if (!ignoreOfferRef.current[from]) {
+          console.warn(`Error adding ICE candidate from ${from}:`, err)
+        }
       }
     })
 
@@ -376,6 +469,8 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
       delete peersRef.current[userId]
       delete peerScreenSharesRef.current[userId]
       delete pendingCandidatesRef.current[userId]
+      delete makingOfferRef.current[userId]
+      delete ignoreOfferRef.current[userId]
       updatePeersUI()
     })
 
@@ -393,39 +488,179 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
     }
   }, [roomCode, userName, createPeerConnection, updatePeersUI])
 
+  // Helper: Build microphone constraints with noise cancellation
+  const getMicConstraints = useCallback(
+    (processing, deviceId) => ({
+      audio: {
+        echoCancellation: processing.echoCancellation ?? true,
+        noiseSuppression: processing.noiseSuppression ?? true,
+        autoGainControl: processing.autoGainControl ?? true,
+        sampleRate: 48000,
+        channelCount: 1, // Standard mono voice capture ensures optimal hardware & browser noise cancellation
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+      },
+    }),
+    []
+  )
+
+  // Live update of noise suppression and audio constraints
+  const handleAudioProcessingChange = useCallback(
+    async (field, val) => {
+      const updated = { ...audioProcessingRef.current, [field]: val }
+      setAudioProcessing(updated)
+
+      // If mic is live, dynamically apply new constraints to live track
+      if (localStreamRef.current && isMicOn) {
+        const audioTrack = localStreamRef.current.getAudioTracks()[0]
+        if (audioTrack) {
+          try {
+            await audioTrack.applyConstraints({
+              echoCancellation: updated.echoCancellation ?? true,
+              noiseSuppression: updated.noiseSuppression ?? true,
+              autoGainControl: updated.autoGainControl ?? true,
+            })
+            console.log(`Applied updated audio processing constraint: ${field}=${val}`)
+          } catch (e) {
+            console.warn('Could not apply audio constraints dynamically, recreating track:', e)
+            try {
+              const newStream = await navigator.mediaDevices.getUserMedia(
+                getMicConstraints(updated, selectedAudioInputRef.current)
+              )
+              const newTrack = newStream.getAudioTracks()[0]
+              if (newTrack) {
+                audioTrack.stop()
+                localStreamRef.current.removeTrack(audioTrack)
+                localStreamRef.current.addTrack(newTrack)
+
+                // Replace track on all peer senders without renegotiation
+                for (const uid in peerConnectionsRef.current) {
+                  const pc = peerConnectionsRef.current[uid]
+                  const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'audio')
+                  if (sender) {
+                    await sender.replaceTrack(newTrack)
+                  }
+                }
+                setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
+              }
+            } catch (recreateErr) {
+              console.error('Error recreating audio track:', recreateErr)
+            }
+          }
+        }
+      }
+    },
+    [isMicOn, getMicConstraints]
+  )
+
+  // Switch microphone input device
+  const handleAudioInputChange = useCallback(
+    async (deviceId) => {
+      setSelectedAudioInput(deviceId)
+
+      if (localStreamRef.current && isMicOn) {
+        const audioTrack = localStreamRef.current.getAudioTracks()[0]
+        try {
+          const newStream = await navigator.mediaDevices.getUserMedia(
+            getMicConstraints(audioProcessingRef.current, deviceId)
+          )
+          const newTrack = newStream.getAudioTracks()[0]
+          if (newTrack) {
+            if (audioTrack) {
+              audioTrack.stop()
+              localStreamRef.current.removeTrack(audioTrack)
+            }
+            localStreamRef.current.addTrack(newTrack)
+
+            for (const uid in peerConnectionsRef.current) {
+              const pc = peerConnectionsRef.current[uid]
+              const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'audio')
+              if (sender) {
+                await sender.replaceTrack(newTrack)
+              }
+            }
+            setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
+          }
+        } catch (err) {
+          console.error('Error switching audio input device:', err)
+        }
+      }
+    },
+    [isMicOn, getMicConstraints]
+  )
+
+  // Switch camera video device
+  const handleVideoInputChange = useCallback(
+    async (deviceId) => {
+      setSelectedVideoInput(deviceId)
+
+      if (localStreamRef.current && isCameraOn) {
+        const videoTrack = localStreamRef.current.getVideoTracks()[0]
+        try {
+          const newStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+              frameRate: { ideal: 30, max: 60 },
+              ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+            },
+          })
+          const newTrack = newStream.getVideoTracks()[0]
+          if (newTrack) {
+            if (videoTrack) {
+              videoTrack.stop()
+              localStreamRef.current.removeTrack(videoTrack)
+            }
+            localStreamRef.current.addTrack(newTrack)
+
+            for (const uid in peerConnectionsRef.current) {
+              const pc = peerConnectionsRef.current[uid]
+              const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video')
+              if (sender) {
+                await sender.replaceTrack(newTrack)
+              }
+            }
+            setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
+          }
+        } catch (err) {
+          console.error('Error switching video camera device:', err)
+        }
+      }
+    },
+    [isCameraOn]
+  )
+
   // Toggle Camera
   const toggleCamera = useCallback(async () => {
     try {
       if (!isCameraOn) {
         if (!localStreamRef.current) {
           const stream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
-            audio: isMicOn
-              ? {
-                  echoCancellation: audioProcessing.echoCancellation,
-                  noiseSuppression: audioProcessing.noiseSuppression,
-                  autoGainControl: audioProcessing.autoGainControl,
-                }
-              : false,
+            video: {
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+              frameRate: { ideal: 30, max: 60 },
+              ...(selectedVideoInputRef.current ? { deviceId: { exact: selectedVideoInputRef.current } } : {}),
+            },
+            audio: isMicOn ? getMicConstraints(audioProcessingRef.current, selectedAudioInputRef.current).audio : false,
           })
           localStreamRef.current = stream
-          setLocalStream(stream)
+          setLocalStream(new MediaStream(stream.getTracks()))
 
           for (const userId in peerConnectionsRef.current) {
             const pc = peerConnectionsRef.current[userId]
             stream.getTracks().forEach((t) => pc.addTrack(t, stream))
-            if (pc.signalingState === 'stable') {
-              const offer = await pc.createOffer()
-              offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
-              await pc.setLocalDescription(offer)
-              socketRef.current.emit('send-offer', { to: userId, offer })
-            }
           }
+          await renegotiateAllPeers()
         } else {
           let videoTrack = localStreamRef.current.getVideoTracks()[0]
           if (!videoTrack) {
             const videoStream = await navigator.mediaDevices.getUserMedia({
-              video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
+              video: {
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+                frameRate: { ideal: 30, max: 60 },
+                ...(selectedVideoInputRef.current ? { deviceId: { exact: selectedVideoInputRef.current } } : {}),
+              },
             })
             videoTrack = videoStream.getVideoTracks()[0]
             localStreamRef.current.addTrack(videoTrack)
@@ -434,13 +669,8 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
             for (const userId in peerConnectionsRef.current) {
               const pc = peerConnectionsRef.current[userId]
               pc.addTrack(videoTrack, localStreamRef.current)
-              if (pc.signalingState === 'stable') {
-                const offer = await pc.createOffer()
-                offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
-                await pc.setLocalDescription(offer)
-                socketRef.current.emit('send-offer', { to: userId, offer })
-              }
             }
+            await renegotiateAllPeers()
           } else {
             videoTrack.enabled = true
             setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
@@ -461,7 +691,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
       console.error('Error toggling camera:', err)
       alert('Could not access camera. Please check device permissions.')
     }
-  }, [isCameraOn, isMicOn, audioProcessing])
+  }, [isCameraOn, isMicOn, getMicConstraints, renegotiateAllPeers])
 
   // Toggle Microphone
   const toggleMic = useCallback(async () => {
@@ -469,38 +699,29 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
       if (!isMicOn) {
         if (!localStreamRef.current) {
           const stream = await navigator.mediaDevices.getUserMedia({
-            video: isCameraOn,
-            audio: {
-              echoCancellation: audioProcessing.echoCancellation,
-              noiseSuppression: audioProcessing.noiseSuppression,
-              autoGainControl: audioProcessing.autoGainControl,
-              sampleRate: 48000,
-            },
+            video: isCameraOn
+              ? {
+                  width: { ideal: 1920 },
+                  height: { ideal: 1080 },
+                  ...(selectedVideoInputRef.current ? { deviceId: { exact: selectedVideoInputRef.current } } : {}),
+                }
+              : false,
+            audio: getMicConstraints(audioProcessingRef.current, selectedAudioInputRef.current).audio,
           })
           localStreamRef.current = stream
-          setLocalStream(stream)
+          setLocalStream(new MediaStream(stream.getTracks()))
 
           for (const userId in peerConnectionsRef.current) {
             const pc = peerConnectionsRef.current[userId]
             stream.getTracks().forEach((t) => pc.addTrack(t, stream))
-            if (pc.signalingState === 'stable') {
-              const offer = await pc.createOffer()
-              offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
-              await pc.setLocalDescription(offer)
-              socketRef.current.emit('send-offer', { to: userId, offer })
-            }
           }
+          await renegotiateAllPeers()
         } else {
           let audioTrack = localStreamRef.current.getAudioTracks()[0]
           if (!audioTrack) {
-            const audioStream = await navigator.mediaDevices.getUserMedia({
-              audio: {
-                echoCancellation: audioProcessing.echoCancellation,
-                noiseSuppression: audioProcessing.noiseSuppression,
-                autoGainControl: audioProcessing.autoGainControl,
-                sampleRate: 48000,
-              },
-            })
+            const audioStream = await navigator.mediaDevices.getUserMedia(
+              getMicConstraints(audioProcessingRef.current, selectedAudioInputRef.current)
+            )
             audioTrack = audioStream.getAudioTracks()[0]
             localStreamRef.current.addTrack(audioTrack)
             setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
@@ -508,13 +729,8 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
             for (const userId in peerConnectionsRef.current) {
               const pc = peerConnectionsRef.current[userId]
               pc.addTrack(audioTrack, localStreamRef.current)
-              if (pc.signalingState === 'stable') {
-                const offer = await pc.createOffer()
-                offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
-                await pc.setLocalDescription(offer)
-                socketRef.current.emit('send-offer', { to: userId, offer })
-              }
             }
+            await renegotiateAllPeers()
           } else {
             audioTrack.enabled = true
             setLocalStream(new MediaStream(localStreamRef.current.getTracks()))
@@ -535,12 +751,13 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
       console.error('Error toggling microphone:', err)
       alert('Could not access microphone. Please check device permissions.')
     }
-  }, [isMicOn, isCameraOn, audioProcessing])
+  }, [isMicOn, isCameraOn, getMicConstraints, renegotiateAllPeers])
 
   // Stop Screen Share
   const stopScreenShare = useCallback(async () => {
-    if (screenStreamRef.current) {
-      screenStreamRef.current.getTracks().forEach((t) => t.stop())
+    const stream = screenStreamRef.current
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop())
     }
 
     if (socketRef.current) {
@@ -554,7 +771,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
       const pc = peerConnectionsRef.current[userId]
       const senders = pc.getSenders()
       for (const sender of senders) {
-        if (sender.track && screenStreamRef.current?.getTracks().includes(sender.track)) {
+        if (sender.track && stream?.getTracks().includes(sender.track)) {
           try {
             pc.removeTrack(sender)
           } catch (e) {
@@ -562,23 +779,13 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
           }
         }
       }
-
-      if (pc.signalingState === 'stable') {
-        try {
-          const offer = await pc.createOffer()
-          offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
-          await pc.setLocalDescription(offer)
-          socketRef.current.emit('send-offer', { to: userId, offer })
-        } catch (e) {
-          console.warn('Error renegotiating after stopping screen share:', e)
-        }
-      }
     }
 
     screenStreamRef.current = null
     setScreenStream(null)
     setIsScreenSharing(false)
-  }, [roomCode])
+    await renegotiateAllPeers()
+  }, [roomCode, renegotiateAllPeers])
 
   // Toggle Screen Share in 1080p 60fps with Desktop / Entire Screen Audio
   const toggleScreenShare = useCallback(async () => {
@@ -586,12 +793,11 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
       if (!isScreenSharing) {
         const displayStream = await getHighQualityDisplayMedia(selectedQuality)
 
-        // Check if Chrome provided an audio track
+        // Check if browser captured an audio track
         let hasAudio = displayStream.getAudioTracks().length > 0
         let audioTrack = displayStream.getAudioTracks()[0]
 
-        // If no audio track provided (e.g. Linux entire screen or unselected in prompt)
-        // Check if user selected an audio input device (like Monitor / Stereo Mix)
+        // Secondary loopback desktop audio device fallback (for Windows / Linux loopback)
         if (!hasAudio && screenAudioDeviceRef.current) {
           try {
             const secondaryStream = await captureAudioDeviceStream(screenAudioDeviceRef.current)
@@ -620,21 +826,24 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         } else {
           setScreenAudioNotice({
             type: 'info',
-            text: 'Screen sharing live. (To stream game sound, tick "Share system audio" in prompt or select your Monitor device in Settings).',
+            text: 'Screen sharing live. (To stream game sound in Chrome, tick "Also share system audio" in dialog).',
           })
         }
         setTimeout(() => setScreenAudioNotice(null), 7000)
 
         // Broadcast screen share status
-        socketRef.current.emit('screen-share-status', {
-          roomCode,
-          isSharing: true,
-          streamId: displayStream.id,
-          hasAudio,
-          quality: selectedQuality,
-          audioTrackId: audioTrack?.id,
-        })
+        if (socketRef.current) {
+          socketRef.current.emit('screen-share-status', {
+            roomCode,
+            isSharing: true,
+            streamId: displayStream.id,
+            hasAudio,
+            quality: selectedQuality,
+            audioTrackId: audioTrack?.id,
+          })
+        }
 
+        // Add tracks to peers
         for (const userId in peerConnectionsRef.current) {
           const pc = peerConnectionsRef.current[userId]
           displayStream.getTracks().forEach((track) => {
@@ -643,22 +852,18 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
               applySenderQuality(sender, selectedQuality)
             }
           })
-
-          if (pc.signalingState === 'stable') {
-            const offer = await pc.createOffer()
-            offer.sdp = lockSdpHighBitrate(offer.sdp, 8000)
-            await pc.setLocalDescription(offer)
-            socketRef.current.emit('send-offer', { to: userId, offer })
-          }
         }
 
+        await renegotiateAllPeers()
+
+        // Handle native browser "Stop sharing" button
         displayStream.getVideoTracks()[0].onended = () => {
           stopScreenShare()
         }
 
         setIsScreenSharing(true)
       } else {
-        stopScreenShare()
+        await stopScreenShare()
       }
     } catch (err) {
       console.error('Error sharing screen:', err)
@@ -666,7 +871,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         alert('Could not start screen sharing. Please check permissions.')
       }
     }
-  }, [isScreenSharing, selectedQuality, roomCode, stopScreenShare])
+  }, [isScreenSharing, selectedQuality, roomCode, stopScreenShare, renegotiateAllPeers])
 
   // Send In-Call Chat Message
   const handleSendMessage = (text) => {
@@ -674,7 +879,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
     socketRef.current.emit('send-chat-message', { roomCode, message: text })
   }
 
-  // Handle Leave
+  // Handle Leave Room
   const handleLeave = () => {
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((t) => t.stop())
@@ -683,15 +888,17 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
       screenStreamRef.current.getTracks().forEach((t) => t.stop())
     }
     Object.values(peerConnectionsRef.current).forEach((pc) => pc.close())
-    socketRef.current.emit('leave-room', { roomCode })
-    socketRef.current.disconnect()
+    if (socketRef.current) {
+      socketRef.current.emit('leave-room', { roomCode })
+      socketRef.current.disconnect()
+    }
     onLeaveRoom()
   }
 
   // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return
 
       const key = e.key.toLowerCase()
       if (key === 'm') {
@@ -767,7 +974,13 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
               : 'bg-red-400'
           }`}
         />
-        <span>{connectionStatus === 'connected' ? 'Connected' : connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}</span>
+        <span>
+          {connectionStatus === 'connected'
+            ? 'Connected'
+            : connectionStatus === 'connecting'
+            ? 'Connecting...'
+            : 'Disconnected'}
+        </span>
       </div>
 
       {/* Main Workspace (Stage/Grid + Chat Drawer) */}
@@ -816,6 +1029,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         unreadCount={unreadCount}
         onOpenSettings={() => setIsSettingsOpen(true)}
         selectedQuality={selectedQuality}
+        isNoiseSuppressed={audioProcessing.noiseSuppression}
       />
 
       {/* Settings & Quality Modal */}
@@ -825,9 +1039,11 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         selectedQuality={selectedQuality}
         onQualityChange={setSelectedQuality}
         audioProcessing={audioProcessing}
-        onAudioProcessingChange={(field, val) =>
-          setAudioProcessing((prev) => ({ ...prev, [field]: val }))
-        }
+        onAudioProcessingChange={handleAudioProcessingChange}
+        selectedAudioInput={selectedAudioInput}
+        onAudioInputChange={handleAudioInputChange}
+        selectedVideoInput={selectedVideoInput}
+        onVideoInputChange={handleVideoInputChange}
         screenAudioDevice={screenAudioDevice}
         onScreenAudioDeviceChange={setScreenAudioDevice}
       />

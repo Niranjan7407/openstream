@@ -29,6 +29,7 @@ export default function Controls({
   unreadCount = 0,
   onOpenSettings,
   selectedQuality = '1080p60',
+  isNoiseSuppressed = true,
 }) {
   const [copiedCode, setCopiedCode] = useState(false)
   const [copiedLink, setCopiedLink] = useState(false)
@@ -175,10 +176,13 @@ export default function Controls({
           {/* Settings */}
           <button
             onClick={onOpenSettings}
-            className="p-2.5 sm:p-3 rounded-xl sm:rounded-2xl bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white border border-gray-700 transition shadow-lg"
-            title="Settings & Stream Quality"
+            className="p-2.5 sm:p-3 rounded-xl sm:rounded-2xl bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white border border-gray-700 transition shadow-lg relative group"
+            title="Settings & Noise Cancellation"
           >
             <Settings size={18} />
+            {isNoiseSuppressed && (
+              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-gray-950" title="Noise Suppression Active" />
+            )}
           </button>
 
           {/* Leave Call */}

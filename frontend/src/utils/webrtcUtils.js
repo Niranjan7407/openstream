@@ -39,89 +39,83 @@ export const STREAM_QUALITIES = {
   },
 }
 
-// Fast Google, Cloudflare, Nextcloud STUN and Metered Free TURN Relays
+// Fast and reliable STUN servers (Google & Cloudflare) for universal cross-platform WebRTC
 export const FAST_ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
-    { urls: 'stun:stun.sipgate.net:3478' },
-    { urls: 'stun:stun.nextcloud.com:443' },
-    {
-      urls: 'stun:openrelay.metered.ca:80',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
   ],
-  iceCandidatePoolSize: 10,
   bundlePolicy: 'max-bundle',
 }
 
-/**
- * Request display media (screen share) with system audio capability
- */
-export async function getHighQualityDisplayMedia(qualityKey = '1080p60') {
-  const quality = STREAM_QUALITIES[qualityKey] || STREAM_QUALITIES['1080p60']
-
-  // Constraints optimized to prompt for system audio across Chrome, Edge, and other browsers
-  const constraints = {
-    video: {
-      cursor: 'always',
-      width: { ideal: quality.width, max: quality.width },
-      height: { ideal: quality.height, max: quality.height },
-      frameRate: { ideal: quality.frameRate, max: quality.frameRate },
-    },
-    audio: {
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-      suppressLocalAudioPlayback: false,
-    },
-    systemAudio: 'include',
-    selfBrowserSurface: 'exclude',
-    surfaceSwitching: 'include',
-  }
-
-  let stream
-  try {
-    stream = await navigator.mediaDevices.getDisplayMedia(constraints)
-  } catch (err) {
-    // Fallback with basic audio: true if complex audio constraints were rejected
-    if (err.name !== 'NotAllowedError') {
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: constraints.video,
-        audio: true,
-      })
-    } else {
-      throw err
-    }
-  }
-
-  // Set content hint on video track for motion fluidity (60fps)
+function initVideoTrackHints(stream) {
+  if (!stream) return
   const videoTrack = stream.getVideoTracks()[0]
   if (videoTrack && 'contentHint' in videoTrack) {
     videoTrack.contentHint = 'motion'
   }
-
-  return stream
 }
 
 /**
- * Capture an audio source (e.g., PulseAudio Monitor on Linux, Stereo Mix on Windows, or Virtual Cable)
+ * Request display media (screen share) with tiered cross-browser compatibility
+ * Handles Chrome, Firefox, Edge, Safari on Windows, Linux, and macOS
+ */
+export async function getHighQualityDisplayMedia(qualityKey = '1080p60') {
+  const quality = STREAM_QUALITIES[qualityKey] || STREAM_QUALITIES['1080p60']
+
+  const videoConstraints = {
+    cursor: 'always',
+    width: { ideal: quality.width, max: quality.width },
+    height: { ideal: quality.height, max: quality.height },
+    frameRate: { ideal: quality.frameRate, max: quality.frameRate },
+  }
+
+  // Tier 1: Optimal Chromium setup with system audio capture
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: videoConstraints,
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        suppressLocalAudioPlayback: false,
+      },
+      systemAudio: 'include',
+      selfBrowserSurface: 'exclude',
+      surfaceSwitching: 'include',
+    })
+    initVideoTrackHints(stream)
+    return stream
+  } catch (err1) {
+    if (err1.name === 'NotAllowedError') throw err1
+
+    // Tier 2: Basic audio capture fallback
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: videoConstraints,
+        audio: true,
+      })
+      initVideoTrackHints(stream)
+      return stream
+    } catch (err2) {
+      if (err2.name === 'NotAllowedError') throw err2
+
+      // Tier 3: Video-only fallback (essential for Firefox where display audio capture throws)
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: videoConstraints,
+      })
+      initVideoTrackHints(stream)
+      return stream
+    }
+  }
+}
+
+/**
+ * Capture an audio source (e.g., Stereo Mix on Windows, PulseAudio Monitor on Linux, or Virtual Cable)
  */
 export async function captureAudioDeviceStream(deviceId = null) {
   const constraints = {
@@ -153,22 +147,18 @@ export async function applySenderQuality(sender, qualityKey = '1080p60') {
   const quality = STREAM_QUALITIES[qualityKey] || STREAM_QUALITIES['1080p60']
 
   try {
-    // Instruct WebRTC to preserve resolution: do NOT downscale 1080p on jitter!
-    if ('degradationPreference' in sender) {
-      sender.degradationPreference = 'maintain-resolution'
-    }
-
     const params = sender.getParameters()
     if (!params.encodings || params.encodings.length === 0) {
       params.encodings = [{}]
     }
 
     params.encodings[0].maxBitrate = quality.maxBitrate
-    params.encodings[0].minBitrate = quality.minBitrate
     params.encodings[0].maxFramerate = quality.frameRate
-    params.encodings[0].scaleResolutionDownBy = 1.0 // Strictly disable downscaling
-    params.encodings[0].priority = 'high'
-    params.encodings[0].networkPriority = 'high'
+    params.encodings[0].scaleResolutionDownBy = 1.0
+
+    if ('degradationPreference' in params) {
+      params.degradationPreference = 'maintain-resolution'
+    }
 
     await sender.setParameters(params)
     console.log(`Locked sender quality: ${quality.label} (${quality.maxBitrate / 1000000} Mbps)`)
@@ -178,29 +168,55 @@ export async function applySenderQuality(sender, qualityKey = '1080p60') {
 }
 
 /**
- * Enhance SDP for high-fidelity stereo Opus audio and enforce high bandwidth limits
+ * Idempotently enhance SDP for high-fidelity stereo Opus audio and enforce high bandwidth limits
+ * Works seamlessly across Chrome, Firefox, Edge without syntax errors or duplicate lines
  */
 export function lockSdpHighBitrate(sdp, maxKbps = 8000) {
   if (!sdp) return sdp
 
-  let modifiedSdp = sdp
+  const lines = sdp.split(/\r\n|\r|\n/)
+  const result = []
+  let inVideoSection = false
+  let videoBwInserted = false
 
-  // Enable Opus stereo at 128 kbps
-  modifiedSdp = modifiedSdp.replace(
-    /(a=fmtp:\d+ .*?useinbandfec=1)/g,
-    '$1;stereo=1;sprop-stereo=1;maxaveragebitrate=128000'
-  )
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i]
 
-  // Insert transport maximum bitrate (b=AS:8000) for video m-line
-  modifiedSdp = modifiedSdp.replace(/(m=video [^\r\n]+[\r\n]+)/g, `$1b=AS:${maxKbps}\r\n`)
+    if (line.startsWith('m=video')) {
+      inVideoSection = true
+      videoBwInserted = false
+      result.push(line)
+      continue
+    } else if (line.startsWith('m=')) {
+      inVideoSection = false
+    }
 
-  // Lock Google WebRTC engine minimum bitrate to avoid automatic drop
-  modifiedSdp = modifiedSdp.replace(
-    /(a=fmtp:\d+ .*?level-asymmetry-allowed=1)/g,
-    '$1;x-google-min-bitrate=3000;x-google-start-bitrate=6000;x-google-max-bitrate=10000'
-  )
+    // Strip existing bandwidth lines under video to avoid duplicate attribute errors
+    if (inVideoSection && (line.startsWith('b=AS:') || line.startsWith('b=TIAS:'))) {
+      continue
+    }
 
-  return modifiedSdp
+    // Insert bandwidth limits before video attributes
+    if (inVideoSection && !videoBwInserted && (line.startsWith('a=') || line === '')) {
+      result.push(`b=AS:${maxKbps}`)
+      result.push(`b=TIAS:${maxKbps * 1000}`)
+      videoBwInserted = true
+    }
+
+    // Opus audio enhancement (stereo and high fidelity audio)
+    if (line.includes('a=fmtp:') && line.includes('useinbandfec=1')) {
+      if (!line.includes('stereo=1')) {
+        line += ';stereo=1;sprop-stereo=1'
+      }
+      if (!line.includes('maxaveragebitrate=')) {
+        line += ';maxaveragebitrate=128000'
+      }
+    }
+
+    result.push(line)
+  }
+
+  return result.join('\r\n')
 }
 
 // Backwards-compatible alias

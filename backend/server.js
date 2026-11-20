@@ -6,48 +6,17 @@ const socketIO = require('socket.io')
 const app = express()
 const server = http.createServer(app)
 
-// Robust origin check supporting localhost, local network IPs, and configured frontend URL
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'http://localhost:4173',
-  (process.env.FRONTEND_URL || 'https://openstream-psi.vercel.app').replace(/\/+$/, '')
-]
-
-const isOriginAllowed = (origin) => {
-  if (!origin) return true
-  const cleanOrigin = origin.replace(/\/+$/, '')
-  if (allowedOrigins.includes(cleanOrigin)) return true
-  // Allow localhost / 127.0.0.1 on any port
-  if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true
-  // Allow local network IP (e.g., 192.168.x.x, 10.x.x.x) on any port for mobile testing
-  if (/^http:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)) return true
-  return false
-}
-
+// Permissive CORS for seamless local network, Windows, Linux, and production browser access
 const io = socketIO(server, {
   cors: {
-    origin: function (origin, callback) {
-      if (isOriginAllowed(origin)) {
-        callback(null, true)
-      } else {
-        callback(null, true) // Allow connection in dev / fallback to avoid breaking
-      }
-    },
+    origin: '*',
     methods: ['GET', 'POST'],
-    credentials: true,
   },
 })
 
 app.use(cors({
-  origin: function (origin, callback) {
-    if (isOriginAllowed(origin)) {
-      callback(null, true)
-    } else {
-      callback(null, true)
-    }
-  },
-  credentials: true,
+  origin: '*',
+  methods: ['GET', 'POST'],
 }))
 
 app.use(express.json())

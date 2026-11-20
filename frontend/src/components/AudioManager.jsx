@@ -6,7 +6,9 @@ function PeerAudioPlayer({ stream, volume, onAutoplayBlocked }) {
 
   useEffect(() => {
     const el = audioRef.current
-    if (el && stream) {
+    if (!el || !stream) return
+
+    const updateAudio = () => {
       if (stream.getAudioTracks().length > 0) {
         if (el.srcObject !== stream) {
           el.srcObject = stream
@@ -16,13 +18,20 @@ function PeerAudioPlayer({ stream, volume, onAutoplayBlocked }) {
         if (playPromise !== undefined) {
           playPromise.catch((err) => {
             console.warn('Autoplay prevented on audio element:', err)
-            onAutoplayBlocked()
+            if (onAutoplayBlocked) onAutoplayBlocked()
           })
         }
       }
     }
-  }, [stream, volume, onAutoplayBlocked])
 
+    updateAudio()
+    stream.addEventListener('addtrack', updateAudio)
+    stream.addEventListener('removetrack', updateAudio)
+    return () => {
+      stream.removeEventListener('addtrack', updateAudio)
+      stream.removeEventListener('removetrack', updateAudio)
+    }
+  }, [stream, volume, onAutoplayBlocked])
 
   return <audio ref={audioRef} autoPlay playsInline />
 }

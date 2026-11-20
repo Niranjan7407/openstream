@@ -39,13 +39,19 @@ const VideoStream = forwardRef(function VideoStream(
 
     checkVideoTrack()
 
-    // Listen to track mute/unmute/ended events to keep UI in sync
+    // Listen to track add/remove/mute/unmute events so video element updates dynamically
     if (stream) {
+      stream.addEventListener('addtrack', checkVideoTrack)
+      stream.addEventListener('removetrack', checkVideoTrack)
       const vTrack = stream.getVideoTracks()[0]
       if (vTrack) {
         vTrack.onmute = checkVideoTrack
         vTrack.onunmute = checkVideoTrack
         vTrack.onended = checkVideoTrack
+      }
+      return () => {
+        stream.removeEventListener('addtrack', checkVideoTrack)
+        stream.removeEventListener('removetrack', checkVideoTrack)
       }
     }
   }, [stream])
@@ -56,10 +62,6 @@ const VideoStream = forwardRef(function VideoStream(
     if (videoEl && stream) {
       if (videoEl.srcObject !== stream) {
         videoEl.srcObject = stream
-      }
-
-      if (!isLocal) {
-        videoEl.volume = Math.min(Math.max(volume, 0), 1)
       }
 
       const tryPlay = () => {
@@ -74,7 +76,7 @@ const VideoStream = forwardRef(function VideoStream(
       videoEl.onloadedmetadata = tryPlay
       videoEl.oncanplay = tryPlay
     }
-  }, [stream, isLocal, volume, hasLiveVideo])
+  }, [stream, hasLiveVideo])
 
   // Inactivity timer for auto-hiding overlays (especially in fullscreen)
   const handleUserActivity = () => {
@@ -177,12 +179,12 @@ const VideoStream = forwardRef(function VideoStream(
         isSpeaking ? 'ring-4 ring-green-500 ring-offset-2 ring-offset-gray-900' : 'border border-gray-800'
       } ${isFullscreen ? 'cursor-none' : ''} ${userActive ? '!cursor-default' : ''}`}
     >
-      {/* Permanent Video Element: Kept in DOM to prevent tearing down decoder on toggle */}
+      {/* Video is always muted because AudioManager manages all incoming voice and screen audio */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        muted={isLocal}
+        muted={true}
         className={`w-full h-full ${isScreen ? 'object-contain' : 'object-cover'} bg-black ${
           showVideoElement ? 'block' : 'hidden'
         }`}
