@@ -7,12 +7,13 @@ const app = express()
 const server = http.createServer(app)
 
 // Permissive CORS across any origin for cross-origin hosting (Vercel, Render, local network, etc.)
-app.use(cors({
+const corsOptions = {
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-}))
-app.options('*', cors())
+}
+app.use(cors(corsOptions))
+app.options(/.*/, cors(corsOptions))
 
 const io = socketIO(server, {
   cors: {
