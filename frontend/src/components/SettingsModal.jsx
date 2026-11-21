@@ -14,8 +14,12 @@ import {
   Sliders,
   AlertCircle,
   Info,
+  Globe,
+  Wifi,
+  Server,
 } from 'lucide-react'
 import { STREAM_QUALITIES } from '../utils/webrtcUtils'
+import { API_URL } from '../config'
 
 export default function SettingsModal({
   isOpen,
@@ -45,6 +49,38 @@ export default function SettingsModal({
   const [isTestingMic, setIsTestingMic] = useState(false)
   const [micLevel, setMicLevel] = useState(0)
   const [screenAudioLevel, setScreenAudioLevel] = useState(0)
+
+  // Network and custom backend URL state
+  const [backendUrlInput, setBackendUrlInput] = useState(() => {
+    return localStorage.getItem('openstream_backend_url') || ''
+  })
+  const [backendNotice, setBackendNotice] = useState('')
+
+  const handleSaveBackendUrl = () => {
+    if (!backendUrlInput.trim()) {
+      localStorage.removeItem('openstream_backend_url')
+      setBackendNotice('Backend URL reset to default. Reloading room in 1s...')
+    } else {
+      let clean = backendUrlInput.trim().replace(/\/+$/, '')
+      if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+        clean = 'https://' + clean
+      }
+      localStorage.setItem('openstream_backend_url', clean)
+      setBackendNotice(`Saved! Backend set to ${clean}. Reloading room in 1s...`)
+    }
+    setTimeout(() => {
+      window.location.reload()
+    }, 1200)
+  }
+
+  const handleResetBackendUrl = () => {
+    localStorage.removeItem('openstream_backend_url')
+    setBackendUrlInput('')
+    setBackendNotice('Reset to default. Reloading room in 1s...')
+    setTimeout(() => {
+      window.location.reload()
+    }, 1200)
+  }
 
   const testStreamRef = useRef(null)
   const audioContextRef = useRef(null)
@@ -270,6 +306,17 @@ export default function SettingsModal({
           >
             <HelpCircle size={16} />
             <span>Shortcuts</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('network')}
+            className={`py-3 text-xs sm:text-sm font-semibold border-b-2 transition flex items-center gap-1.5 sm:gap-2 shrink-0 ${
+              activeTab === 'network'
+                ? 'border-purple-500 text-purple-400'
+                : 'border-transparent text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            <Globe size={16} />
+            <span>Connection & Relays</span>
           </button>
         </div>
 
@@ -728,6 +775,151 @@ export default function SettingsModal({
                   <span>Exit Fullscreen / Close Modals</span>
                   <kbd className="bg-gray-800 px-2 py-1 rounded text-xs font-mono text-gray-300 border border-gray-700">Esc</kbd>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'network' && (
+            <div className="space-y-5">
+              {/* Architecture & NAT explanation */}
+              <div className="bg-gradient-to-r from-blue-950/40 via-purple-950/40 to-indigo-950/40 border border-blue-500/30 rounded-2xl p-4 shadow-lg space-y-2">
+                <div className="flex items-center gap-2 text-white font-bold text-xs sm:text-sm">
+                  <Globe size={18} className="text-blue-400" />
+                  <span>Cross-Origin & NAT Traversal Engine</span>
+                  <span className="bg-emerald-500/20 text-emerald-300 text-[10px] px-2 py-0.5 rounded-full font-mono uppercase tracking-wider border border-emerald-500/30">
+                    STUN + TURN Relays Active
+                  </span>
+                </div>
+                <p className="text-gray-300 text-xs leading-relaxed">
+                  When connecting across different networks (e.g. mobile 4G/5G, different routers/ISPs, or different origins), Symmetric NAT and firewalls block direct peer-to-peer UDP.
+                  OpenStream uses high-speed <strong>Google & Cloudflare STUN</strong> plus <strong>OpenRelay TURN</strong> (UDP ports 80/443 & TCP/TLS port 443) to guarantee seamless audio/video transmission without port forwarding.
+                </p>
+                <div className="flex flex-wrap gap-2 pt-1 text-[11px] text-gray-300 font-medium">
+                  <span className="bg-black/40 px-2 py-1 rounded-lg border border-white/5 flex items-center gap-1.5">
+                    <CheckCircle2 size={13} className="text-green-400" />
+                    <span>WebSocket-first Signaling (Origin Independent)</span>
+                  </span>
+                  <span className="bg-black/40 px-2 py-1 rounded-lg border border-white/5 flex items-center gap-1.5">
+                    <CheckCircle2 size={13} className="text-green-400" />
+                    <span>Automatic ICE Restart on packet loss</span>
+                  </span>
+                  <span className="bg-black/40 px-2 py-1 rounded-lg border border-white/5 flex items-center gap-1.5">
+                    <CheckCircle2 size={13} className="text-green-400" />
+                    <span>Port 443 TCP/TLS Fallback for restrictive firewalls</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Signaling Server URL Configuration */}
+              <div className="bg-gray-950 border border-gray-800 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-white font-semibold text-xs sm:text-sm flex items-center gap-2">
+                      <Server size={16} className="text-purple-400" />
+                      Signaling Server URL
+                    </h4>
+                    <p className="text-gray-400 text-[11px] mt-0.5">
+                      Backend Socket.IO server connecting room members.
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-mono bg-purple-900/40 text-purple-300 px-2 py-0.5 rounded border border-purple-700/50">
+                    Active: {API_URL}
+                  </span>
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={backendUrlInput}
+                    onChange={(e) => setBackendUrlInput(e.target.value)}
+                    placeholder="e.g. https://openstream-api.yourdomain.com or http://192.168.1.50:3001"
+                    className="flex-1 bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs sm:text-sm focus:outline-none focus:border-purple-500 font-mono"
+                  />
+                  <button
+                    onClick={handleSaveBackendUrl}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-xl text-xs sm:text-sm transition cursor-pointer"
+                  >
+                    Save & Apply
+                  </button>
+                  {localStorage.getItem('openstream_backend_url') && (
+                    <button
+                      onClick={handleResetBackendUrl}
+                      className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 font-semibold rounded-xl text-xs sm:text-sm transition cursor-pointer"
+                      title="Reset to default"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+                {backendNotice && (
+                  <p className="text-xs text-amber-300 flex items-center gap-1.5">
+                    <Info size={14} />
+                    {backendNotice}
+                  </p>
+                )}
+              </div>
+
+              {/* Active Relays Status */}
+              <div className="bg-gray-950 border border-gray-800 rounded-2xl p-4 space-y-3">
+                <h4 className="text-white font-semibold text-xs sm:text-sm flex items-center gap-2">
+                  <Wifi size={16} className="text-emerald-400" />
+                  ICE / STUN & TURN Relays
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  <div className="p-2.5 bg-gray-900/80 rounded-xl border border-gray-800 flex items-start gap-2">
+                    <CheckCircle2 size={15} className="text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-semibold text-gray-200">Google & Cloudflare STUN</div>
+                      <div className="text-gray-400 text-[11px]">Direct public NAT hole punching</div>
+                    </div>
+                  </div>
+                  <div className="p-2.5 bg-gray-900/80 rounded-xl border border-gray-800 flex items-start gap-2">
+                    <CheckCircle2 size={15} className="text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-semibold text-gray-200">OpenRelay TURN (UDP 80/443)</div>
+                      <div className="text-gray-400 text-[11px]">Symmetric NAT & mobile network traversal</div>
+                    </div>
+                  </div>
+                  <div className="p-2.5 bg-gray-900/80 rounded-xl border border-gray-800 flex items-start gap-2">
+                    <CheckCircle2 size={15} className="text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-semibold text-gray-200">TURNS TLS / TCP Port 443</div>
+                      <div className="text-gray-400 text-[11px]">Encrypted bypass for restrictive corporate firewalls</div>
+                    </div>
+                  </div>
+                  <div className="p-2.5 bg-gray-900/80 rounded-xl border border-gray-800 flex items-start gap-2">
+                    <CheckCircle2 size={15} className="text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-semibold text-gray-200">Dynamic Server Discovery</div>
+                      <div className="text-gray-400 text-[11px]">Discovers custom TURN from /api/ice-servers</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Secure Context (HTTPS) Notice */}
+              <div className={`p-4 rounded-2xl border text-xs sm:text-sm space-y-2 ${
+                typeof window !== 'undefined' && window.isSecureContext !== false
+                  ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200'
+                  : 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+              }`}>
+                <div className="flex items-center gap-2 font-bold">
+                  {typeof window !== 'undefined' && window.isSecureContext !== false ? (
+                    <>
+                      <CheckCircle2 size={16} className="text-emerald-400" />
+                      <span>Secure Context Verified (HTTPS / Localhost)</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertCircle size={16} className="text-amber-400" />
+                      <span>Insecure HTTP Context Detected</span>
+                    </>
+                  )}
+                </div>
+                <p className="text-xs text-gray-300 leading-relaxed">
+                  Web browsers (Chrome, Edge, Firefox, Safari) strictly require a <strong>Secure Context</strong> to grant access to media devices (Camera, Microphone, Screen Sharing).
+                  When accessing OpenStream from another device, either serve it over HTTPS (e.g. Cloudflare Tunnel, ngrok, Caddy, or mkcert) or whitelist your IP in Chrome via <code className="bg-black/50 px-1 py-0.5 rounded text-[11px] text-purple-300">chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>.
+                </p>
               </div>
             </div>
           )}

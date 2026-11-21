@@ -12,6 +12,7 @@ import {
   applySenderQuality,
   lockSdpHighBitrate,
   FAST_ICE_SERVERS,
+  getIceServersConfiguration,
 } from '../utils/webrtcUtils'
 
 export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
@@ -39,6 +40,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
 
   // Screen share toast / info
   const [screenAudioNotice, setScreenAudioNotice] = useState(null)
+  const isInsecureContext = typeof window !== 'undefined' && window.isSecureContext === false
 
   // Quality, Desktop Audio & Voice Settings with LocalStorage persistence
   const [selectedQuality, setSelectedQuality] = useState('1080p60')
@@ -82,6 +84,22 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
   const audioProcessingRef = useRef(audioProcessing)
   const selectedAudioInputRef = useRef(selectedAudioInput)
   const selectedVideoInputRef = useRef(selectedVideoInput)
+  const iceServersRef = useRef(FAST_ICE_SERVERS)
+
+  useEffect(() => {
+    // Dynamically query ICE / TURN relays from backend if reachable
+    fetch(`${API_URL}/api/ice-servers`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+          iceServersRef.current = getIceServersConfiguration(data.iceServers)
+          console.log(`Discovered ${data.iceServers.length} ICE / TURN relay servers from backend`)
+        }
+      })
+      .catch((e) => {
+        console.debug('Using built-in STUN & TURN servers:', e)
+      })
+  }, [])
 
   useEffect(() => {
     selectedQualityRef.current = selectedQuality
@@ -179,7 +197,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         }
 
         console.log(`Creating RTCPeerConnection with ${userId} (initiator: ${initiator})`)
-        const pc = new RTCPeerConnection(FAST_ICE_SERVERS)
+        const pc = new RTCPeerConnection(iceServersRef.current)
         peerConnectionsRef.current[userId] = pc
         makingOfferRef.current[userId] = false
         ignoreOfferRef.current[userId] = false
@@ -226,8 +244,13 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         pc.onconnectionstatechange = () => {
           console.log(`Connection state with ${userId}: ${pc.connectionState}`)
           if (pc.connectionState === 'failed') {
-            console.log(`Restarting ICE with ${userId}...`)
-            pc.restartIce()
+            console.log(`Restarting ICE on connection failure with ${userId}...`)
+            try {
+              pc.restartIce()
+              renegotiatePeer(userId)
+            } catch (err) {
+              console.error(`Error restarting ICE on connection state failure for ${userId}:`, err)
+            }
           } else if (pc.connectionState === 'closed') {
             delete peerConnectionsRef.current[userId]
             delete peersRef.current[userId]
@@ -235,6 +258,20 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
             delete makingOfferRef.current[userId]
             delete ignoreOfferRef.current[userId]
             updatePeersUI()
+          }
+        }
+
+        // ICE Connection state monitoring (recovers from NAT/Firewall drops across different networks)
+        pc.oniceconnectionstatechange = () => {
+          console.log(`ICE connection state with ${userId}: ${pc.iceConnectionState}`)
+          if (pc.iceConnectionState === 'failed') {
+            console.warn(`ICE failed with ${userId}, attempting restartIce()...`)
+            try {
+              pc.restartIce()
+              renegotiatePeer(userId)
+            } catch (err) {
+              console.error(`Error restarting ICE for ${userId}:`, err)
+            }
           }
         }
 
@@ -325,12 +362,13 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         return null
       }
     },
-    [updatePeersUI]
+    [updatePeersUI, renegotiatePeer]
   )
 
   // Socket & WebRTC setup
   useEffect(() => {
     const socket = io(API_URL, {
+      transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
@@ -956,6 +994,26 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
 
   return (
     <div className="h-screen w-screen bg-gray-950 flex flex-col overflow-hidden text-gray-100 font-sans">
+      {/* Insecure Context Warning */}
+      {isInsecureContext && (
+        <div className="bg-amber-950/90 border-b border-amber-600/50 px-4 py-2 text-xs text-amber-200 flex items-center justify-between z-50">
+          <div className="flex items-center gap-2">
+            <span className="font-bold uppercase tracking-wider bg-amber-600/30 px-1.5 py-0.5 rounded text-[10px]">
+              Insecure HTTP
+            </span>
+            <span>
+              Browsers disable Camera, Mic, and Screen Sharing over non-localhost HTTP. Access via <strong>HTTPS or localhost</strong>.
+            </span>
+          </div>
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="underline hover:text-white text-[11px] ml-2 shrink-0 font-medium"
+          >
+            Connection Settings
+          </button>
+        </div>
+      )}
+
       {/* Top Notification / Audio Banner */}
       {screenAudioNotice && (
         <div

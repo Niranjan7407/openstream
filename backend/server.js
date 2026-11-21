@@ -6,24 +6,68 @@ const socketIO = require('socket.io')
 const app = express()
 const server = http.createServer(app)
 
-// Permissive CORS for seamless local network, Windows, Linux, and production browser access
+// Permissive CORS across any origin for cross-origin hosting (Vercel, Render, local network, etc.)
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+}))
+app.options('*', cors())
+
 const io = socketIO(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST'],
   },
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
 })
-
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST'],
-}))
 
 app.use(express.json())
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() })
+})
+
+// ICE / TURN Servers endpoint for clients to discover relays dynamically
+app.get('/api/ice-servers', (req, res) => {
+  const customTurnUrl = process.env.TURN_URL
+  const customTurnUsername = process.env.TURN_USERNAME
+  const customTurnCredential = process.env.TURN_CREDENTIAL
+
+  const iceServers = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    { urls: 'stun:openrelay.metered.ca:80' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turns:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+  ]
+
+  if (customTurnUrl) {
+    iceServers.push({
+      urls: customTurnUrl,
+      username: customTurnUsername,
+      credential: customTurnCredential,
+    })
+  }
+
+  res.json({ iceServers })
 })
 
 const rooms = new Map() // roomCode -> Set of socketId

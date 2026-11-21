@@ -39,18 +39,56 @@ export const STREAM_QUALITIES = {
   },
 }
 
-// Fast and reliable STUN servers (Google & Cloudflare) for universal cross-platform WebRTC
-export const FAST_ICE_SERVERS = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
-    { urls: 'stun:stun.cloudflare.com:3478' },
-  ],
-  bundlePolicy: 'max-bundle',
+// Universal ICE Servers: High-speed Google & Cloudflare STUN + OpenRelay TURN
+// STUN handles direct P2P on same network/open NAT; TURN relays media through symmetric NAT, CGNAT, & mobile firewalls across different origins/networks
+export const DEFAULT_ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:openrelay.metered.ca:80' },
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turns:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+]
+
+export function getIceServersConfiguration(customServers = null) {
+  let servers = DEFAULT_ICE_SERVERS
+  try {
+    const saved = localStorage.getItem('openstream_custom_ice_servers')
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        servers = parsed
+      }
+    }
+  } catch (e) {
+    console.debug('Error reading custom ICE servers from localStorage:', e)
+  }
+
+  if (Array.isArray(customServers) && customServers.length > 0) {
+    servers = customServers
+  }
+
+  return {
+    iceServers: servers,
+    bundlePolicy: 'max-bundle',
+  }
 }
+
+export const FAST_ICE_SERVERS = getIceServersConfiguration()
 
 function initVideoTrackHints(stream) {
   if (!stream) return
