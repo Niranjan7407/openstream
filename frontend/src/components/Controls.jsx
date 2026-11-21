@@ -13,6 +13,8 @@ import {
   Maximize2,
   Minimize2,
   Check,
+  Volume2,
+  VolumeX,
 } from 'lucide-react'
 
 export default function Controls({
@@ -20,9 +22,12 @@ export default function Controls({
   isCameraOn,
   isMicOn,
   isScreenSharing,
+  hasScreenAudio = false,
+  isScreenAudioMuted = false,
   onToggleCamera,
   onToggleMic,
   onToggleScreenShare,
+  onToggleScreenAudioMute,
   onLeave,
   onToggleChat,
   isChatOpen,
@@ -142,6 +147,36 @@ export default function Controls({
               {selectedQuality}
             </span>
           </button>
+
+          {/* Quick Screen Audio Mute / Unmute Toggle (When Screen Sharing) */}
+          {isScreenSharing && (
+            <button
+              onClick={onToggleScreenAudioMute}
+              disabled={!hasScreenAudio}
+              className={`p-2.5 sm:p-3 rounded-xl sm:rounded-2xl transition shadow-lg relative group ${
+                !hasScreenAudio
+                  ? 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed opacity-60'
+                  : isScreenAudioMuted
+                  ? 'bg-amber-600 hover:bg-amber-700 text-white border border-amber-500'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-500 ring-2 ring-emerald-400/40'
+              }`}
+              title={
+                !hasScreenAudio
+                  ? 'Screen video only (No game/system sound was shared)'
+                  : isScreenAudioMuted
+                  ? 'Unmute game/screen sound'
+                  : 'Mute game/screen sound (Streaming in high fidelity stereo)'
+              }
+            >
+              {!hasScreenAudio ? (
+                <VolumeX size={18} />
+              ) : isScreenAudioMuted ? (
+                <VolumeX size={18} />
+              ) : (
+                <Volume2 size={18} />
+              )}
+            </button>
+          )}
 
           {/* Fullscreen Room */}
           <button

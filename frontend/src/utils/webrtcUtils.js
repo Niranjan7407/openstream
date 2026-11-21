@@ -115,6 +115,113 @@ export async function getHighQualityDisplayMedia(qualityKey = '1080p60') {
 }
 
 /**
+ * Web Audio API Stream Mixer (Option B):
+ * Merges high-definition screen/game audio and microphone audio into a single clean WebRTC track
+ * with independent gain controls and zero feedback loopback.
+ */
+export class StreamAudioMixer {
+  constructor() {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext
+    this.ctx = new AudioCtx()
+    this.destination = this.ctx.createMediaStreamDestination()
+
+    // Microphone branch (with independent gain)
+    this.micSource = null
+    this.micGain = this.ctx.createGain()
+    this.micGain.gain.value = 1.0
+
+    // Screen / Game Audio branch (with independent gain)
+    this.screenSource = null
+    this.screenGain = this.ctx.createGain()
+    this.screenGain.gain.value = 1.0
+
+    // Connect both gains to destination
+    this.micGain.connect(this.destination)
+    this.screenGain.connect(this.destination)
+  }
+
+  setMicTrack(track) {
+    if (this.micSource) {
+      try {
+        this.micSource.disconnect()
+      } catch (e) {
+        console.warn('Error disconnecting micSource:', e)
+      }
+      this.micSource = null
+    }
+    if (track) {
+      try {
+        const stream = new MediaStream([track])
+        this.micSource = this.ctx.createMediaStreamSource(stream)
+        this.micSource.connect(this.micGain)
+      } catch (e) {
+        console.warn('Error connecting micSource in mixer:', e)
+      }
+    }
+  }
+
+  setScreenTrack(track) {
+    if (this.screenSource) {
+      try {
+        this.screenSource.disconnect()
+      } catch (e) {
+        console.warn('Error disconnecting screenSource:', e)
+      }
+      this.screenSource = null
+    }
+    if (track) {
+      try {
+        const stream = new MediaStream([track])
+        this.screenSource = this.ctx.createMediaStreamSource(stream)
+        this.screenSource.connect(this.screenGain)
+      } catch (e) {
+        console.warn('Error connecting screenSource in mixer:', e)
+      }
+    }
+  }
+
+  setMicGain(val) {
+    if (this.micGain) {
+      this.micGain.gain.setTargetAtTime(Math.max(0, val), this.ctx.currentTime, 0.05)
+    }
+  }
+
+  setScreenGain(val) {
+    if (this.screenGain) {
+      this.screenGain.gain.setTargetAtTime(Math.max(0, val), this.ctx.currentTime, 0.05)
+    }
+  }
+
+  getMixedTrack() {
+    return this.destination.stream.getAudioTracks()[0] || null
+  }
+
+  getMixedStream() {
+    return this.destination.stream
+  }
+
+  close() {
+    if (this.micSource) {
+      try {
+        this.micSource.disconnect()
+      } catch (err) {
+        console.debug('Error disconnecting micSource:', err)
+      }
+    }
+    if (this.screenSource) {
+      try {
+        this.screenSource.disconnect()
+      } catch (err) {
+        console.debug('Error disconnecting screenSource:', err)
+      }
+    }
+    if (this.ctx && this.ctx.state !== 'closed') {
+      this.ctx.close().catch(console.warn)
+    }
+  }
+}
+
+/**
  * Capture an audio source (e.g., Stereo Mix on Windows, PulseAudio Monitor on Linux, or Virtual Cable)
  */
 export async function captureAudioDeviceStream(deviceId = null) {

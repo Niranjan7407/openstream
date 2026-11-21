@@ -31,6 +31,9 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
   const [isCameraOn, setIsCameraOn] = useState(false)
   const [isMicOn, setIsMicOn] = useState(false)
   const [isScreenSharing, setIsScreenSharing] = useState(false)
+  const [isScreenAudioMuted, setIsScreenAudioMuted] = useState(false)
+  const [micGain, setMicGain] = useState(1.0)
+  const [screenAudioGain, setScreenAudioGain] = useState(1.0)
   const [connectionStatus, setConnectionStatus] = useState('connecting')
   const [currentSocketId, setCurrentSocketId] = useState('')
 
@@ -787,6 +790,20 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
     await renegotiateAllPeers()
   }, [roomCode, renegotiateAllPeers])
 
+  // Toggle Screen Audio Mute
+  const toggleScreenAudioMute = useCallback(() => {
+    setIsScreenAudioMuted((prev) => {
+      const next = !prev
+      if (screenStreamRef.current) {
+        const aTrack = screenStreamRef.current.getAudioTracks()[0]
+        if (aTrack) {
+          aTrack.enabled = !next
+        }
+      }
+      return next
+    })
+  }, [])
+
   // Toggle Screen Share in 1080p 60fps with Desktop / Entire Screen Audio
   const toggleScreenShare = useCallback(async () => {
     try {
@@ -813,6 +830,10 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
           }
         }
 
+        if (hasAudio && audioTrack) {
+          audioTrack.enabled = !isScreenAudioMuted
+        }
+
         screenStreamRef.current = displayStream
         setScreenStream(displayStream)
 
@@ -821,12 +842,12 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         if (hasAudio) {
           setScreenAudioNotice({
             type: 'success',
-            text: 'Screen sharing with 1080p 60fps and system/game audio live!',
+            text: 'Screen sharing with 1080p 60fps & game/system audio active! (Zero echo)',
           })
         } else {
           setScreenAudioNotice({
             type: 'info',
-            text: 'Screen sharing live. (To stream game sound in Chrome, tick "Also share system audio" in dialog).',
+            text: 'Screen sharing video only. (To include game sound, tick "Also share system audio" in share dialog).',
           })
         }
         setTimeout(() => setScreenAudioNotice(null), 7000)
@@ -871,7 +892,7 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         alert('Could not start screen sharing. Please check permissions.')
       }
     }
-  }, [isScreenSharing, selectedQuality, roomCode, stopScreenShare, renegotiateAllPeers])
+  }, [isScreenSharing, selectedQuality, roomCode, stopScreenShare, renegotiateAllPeers, isScreenAudioMuted])
 
   // Send In-Call Chat Message
   const handleSendMessage = (text) => {
@@ -1015,9 +1036,12 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         isCameraOn={isCameraOn}
         isMicOn={isMicOn}
         isScreenSharing={isScreenSharing}
+        hasScreenAudio={Boolean(screenStream && screenStream.getAudioTracks().length > 0)}
+        isScreenAudioMuted={isScreenAudioMuted}
         onToggleCamera={toggleCamera}
         onToggleMic={toggleMic}
         onToggleScreenShare={toggleScreenShare}
+        onToggleScreenAudioMute={toggleScreenAudioMute}
         onLeave={handleLeave}
         onToggleChat={() => {
           setIsChatOpen((prev) => {
@@ -1046,6 +1070,15 @@ export default function RoomPage({ roomCode, userName = 'You', onLeaveRoom }) {
         onVideoInputChange={handleVideoInputChange}
         screenAudioDevice={screenAudioDevice}
         onScreenAudioDeviceChange={setScreenAudioDevice}
+        micGain={micGain}
+        onMicGainChange={setMicGain}
+        screenAudioGain={screenAudioGain}
+        onScreenAudioGainChange={setScreenAudioGain}
+        isScreenAudioMuted={isScreenAudioMuted}
+        onToggleScreenAudioMute={toggleScreenAudioMute}
+        isScreenSharing={isScreenSharing}
+        hasScreenAudio={Boolean(screenStream && screenStream.getAudioTracks().length > 0)}
+        screenStream={screenStream}
       />
     </div>
   )

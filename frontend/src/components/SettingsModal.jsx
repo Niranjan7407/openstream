@@ -1,5 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
-import { X, Settings, Mic, Monitor, Sparkles, HelpCircle, Volume2, ShieldCheck, Activity, CheckCircle2 } from 'lucide-react'
+import {
+  X,
+  Settings,
+  Mic,
+  Monitor,
+  Sparkles,
+  HelpCircle,
+  Volume2,
+  VolumeX,
+  ShieldCheck,
+  Activity,
+  CheckCircle2,
+  Sliders,
+  AlertCircle,
+  Info,
+} from 'lucide-react'
 import { STREAM_QUALITIES } from '../utils/webrtcUtils'
 
 export default function SettingsModal({
@@ -15,15 +30,28 @@ export default function SettingsModal({
   onVideoInputChange,
   screenAudioDevice,
   onScreenAudioDeviceChange,
+  micGain = 1.0,
+  onMicGainChange,
+  screenAudioGain = 1.0,
+  onScreenAudioGainChange,
+  isScreenAudioMuted = false,
+  onToggleScreenAudioMute,
+  isScreenSharing = false,
+  hasScreenAudio = false,
+  screenStream = null,
 }) {
   const [devices, setDevices] = useState({ audioInputs: [], videoInputs: [] })
   const [activeTab, setActiveTab] = useState('audio') // Default to audio/voice for quick access
   const [isTestingMic, setIsTestingMic] = useState(false)
   const [micLevel, setMicLevel] = useState(0)
+  const [screenAudioLevel, setScreenAudioLevel] = useState(0)
 
   const testStreamRef = useRef(null)
   const audioContextRef = useRef(null)
   const animFrameRef = useRef(null)
+
+  const screenMeterCtxRef = useRef(null)
+  const screenAnimFrameRef = useRef(null)
 
   // Enumerate audio and video input devices
   useEffect(() => {
@@ -32,7 +60,6 @@ export default function SettingsModal({
     let isMounted = true
     const fetchDevices = async () => {
       try {
-        // Enumerate available devices
         const devList = await navigator.mediaDevices.enumerateDevices()
         if (isMounted) {
           setDevices({
@@ -111,7 +138,6 @@ export default function SettingsModal({
           sum += pcmData[i]
         }
         const avg = sum / pcmData.length
-        // Scale 0-255 to 0-100%
         const normalized = Math.min(Math.round((avg / 128) * 100), 100)
         setMicLevel(normalized)
         animFrameRef.current = requestAnimationFrame(tick)
@@ -125,10 +151,66 @@ export default function SettingsModal({
     }
   }
 
+  // Screen audio level meter when screen sharing has audio
+  useEffect(() => {
+    if (!isOpen || !screenStream || !hasScreenAudio) return
+
+    const audioTrack = screenStream.getAudioTracks()[0]
+    if (!audioTrack) return
+
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext
+      const ctx = new AudioCtx()
+      screenMeterCtxRef.current = ctx
+
+      const source = ctx.createMediaStreamSource(new MediaStream([audioTrack]))
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 256
+      analyser.smoothingTimeConstant = 0.6
+      source.connect(analyser)
+
+      const pcmData = new Uint8Array(analyser.frequencyBinCount)
+
+      const tickScreen = () => {
+        analyser.getByteFrequencyData(pcmData)
+        let sum = 0
+        for (let i = 0; i < pcmData.length; i++) {
+          sum += pcmData[i]
+        }
+        const avg = sum / pcmData.length
+        const normalized = Math.min(Math.round((avg / 128) * 100), 100)
+        setScreenAudioLevel(normalized)
+        screenAnimFrameRef.current = requestAnimationFrame(tickScreen)
+      }
+
+      tickScreen()
+    } catch (err) {
+      console.warn('Screen audio meter failed:', err)
+    }
+
+    return () => {
+      if (screenAnimFrameRef.current) {
+        cancelAnimationFrame(screenAnimFrameRef.current)
+        screenAnimFrameRef.current = null
+      }
+      if (screenMeterCtxRef.current && screenMeterCtxRef.current.state !== 'closed') {
+        screenMeterCtxRef.current.close().catch(console.warn)
+        screenMeterCtxRef.current = null
+      }
+      setScreenAudioLevel(0)
+    }
+  }, [isOpen, screenStream, hasScreenAudio])
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       cleanupTestAudio()
+      if (screenAnimFrameRef.current) {
+        cancelAnimationFrame(screenAnimFrameRef.current)
+      }
+      if (screenMeterCtxRef.current && screenMeterCtxRef.current.state !== 'closed') {
+        screenMeterCtxRef.current.close().catch(console.warn)
+      }
     }
   }, [])
 
@@ -141,7 +223,7 @@ export default function SettingsModal({
         <div className="p-4 sm:p-5 border-b border-gray-800 flex items-center justify-between bg-gray-950">
           <div className="flex items-center gap-2.5 text-white font-bold text-base sm:text-lg">
             <Settings size={20} className="text-purple-400" />
-            <span>Settings & Audio Controls</span>
+            <span>Audio Studio & Stream Quality</span>
           </div>
           <button
             onClick={() => {
@@ -165,7 +247,7 @@ export default function SettingsModal({
             }`}
           >
             <Mic size={16} />
-            <span>Audio & Noise Cancellation</span>
+            <span>Voice & Game Mixer (Zero Echo)</span>
           </button>
           <button
             onClick={() => setActiveTab('stream')}
@@ -195,25 +277,58 @@ export default function SettingsModal({
         <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1 text-gray-200 text-sm">
           {activeTab === 'audio' && (
             <div className="space-y-5">
+              {/* Zero Echo Architecture Card */}
+              <div className="bg-gradient-to-r from-purple-950/50 via-indigo-950/40 to-blue-950/40 border border-purple-500/30 rounded-2xl p-4 shadow-lg space-y-2">
+                <div className="flex items-center gap-2 text-white font-bold text-xs sm:text-sm">
+                  <ShieldCheck size={18} className="text-emerald-400" />
+                  <span>Zero-Echo Dual Stream Architecture</span>
+                  <span className="bg-emerald-500/20 text-emerald-300 text-[10px] px-2 py-0.5 rounded-full font-mono uppercase tracking-wider border border-emerald-500/30">
+                    No Stereo Mix Needed
+                  </span>
+                </div>
+                <p className="text-gray-300 text-xs leading-relaxed">
+                  OpenStream captures <strong>game & system audio directly from your screen share</strong> in pure 48kHz stereo, while capturing your <strong>microphone separately with Echo Cancellation & AI Noise Suppression</strong>.
+                  Your friends will never hear their own voice looped back, and you can talk freely while playing!
+                </p>
+                <div className="flex flex-wrap gap-2 pt-1 text-[11px] text-gray-300 font-medium">
+                  <span className="bg-black/40 px-2 py-1 rounded-lg border border-white/5 flex items-center gap-1.5">
+                    <CheckCircle2 size={13} className="text-green-400" />
+                    <span>Real Mic + Game Sound Together</span>
+                  </span>
+                  <span className="bg-black/40 px-2 py-1 rounded-lg border border-white/5 flex items-center gap-1.5">
+                    <CheckCircle2 size={13} className="text-green-400" />
+                    <span>Zero Loopback Echo</span>
+                  </span>
+                  <span className="bg-black/40 px-2 py-1 rounded-lg border border-white/5 flex items-center gap-1.5">
+                    <CheckCircle2 size={13} className="text-green-400" />
+                    <span>Independent Voice & Game Faders</span>
+                  </span>
+                </div>
+              </div>
+
               {/* Device Selectors */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {devices.audioInputs.length > 0 && (
                   <div>
                     <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
-                      Microphone Device
+                      Your Microphone Device
                     </label>
                     <select
                       value={selectedAudioInput || ''}
                       onChange={(e) => onAudioInputChange && onAudioInputChange(e.target.value)}
                       className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs sm:text-sm focus:outline-none focus:border-purple-500"
                     >
-                      <option value="">Default Microphone</option>
+                      <option value="">Default Microphone / Headset</option>
                       {devices.audioInputs.map((d) => (
                         <option key={d.deviceId} value={d.deviceId}>
                           {d.label || `Microphone ${d.deviceId.slice(0, 5)}`}
                         </option>
                       ))}
                     </select>
+                    <span className="text-[10px] text-amber-400 mt-1 block flex items-center gap-1">
+                      <AlertCircle size={11} />
+                      <span>Choose your real microphone. Do not select Stereo Mix.</span>
+                    </span>
                   </div>
                 )}
 
@@ -238,6 +353,152 @@ export default function SettingsModal({
                 )}
               </div>
 
+              {/* Streamer Audio Studio Faders (Microphone Gain & Screen Sound Gain) */}
+              <div className="bg-gray-950/80 border border-gray-800 rounded-2xl p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-white font-semibold text-xs sm:text-sm">
+                    <Sliders size={16} className="text-purple-400" />
+                    <span>Broadcaster Audio Mixer & Faders</span>
+                  </div>
+                </div>
+
+                {/* Microphone Level Fader */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="font-semibold text-white flex items-center gap-1.5">
+                      <Mic size={14} className="text-purple-400" />
+                      <span>Microphone Volume</span>
+                    </span>
+                    <span className="text-purple-400 font-mono font-bold">
+                      {Math.round((micGain ?? 1.0) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.05"
+                    value={micGain ?? 1.0}
+                    onChange={(e) => onMicGainChange && onMicGainChange(parseFloat(e.target.value))}
+                    className="w-full h-1.5 bg-gray-800 rounded-lg accent-purple-500 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[10px] text-gray-500">
+                    <span>Mute (0%)</span>
+                    <span>Normal (100%)</span>
+                    <span>Boost (200%)</span>
+                  </div>
+                </div>
+
+                {/* Screen / Game Audio Fader & Mute */}
+                <div className="space-y-1.5 pt-2 border-t border-gray-800/80">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="font-semibold text-white flex items-center gap-1.5">
+                      <Volume2 size={14} className="text-blue-400" />
+                      <span>Screen / Game Audio Volume</span>
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={onToggleScreenAudioMute}
+                        disabled={!isScreenSharing || !hasScreenAudio}
+                        className={`text-[10px] px-2 py-0.5 rounded font-semibold transition flex items-center gap-1 ${
+                          !isScreenSharing || !hasScreenAudio
+                            ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                            : isScreenAudioMuted
+                            ? 'bg-amber-600 text-white'
+                            : 'bg-emerald-600 text-white'
+                        }`}
+                      >
+                        {isScreenAudioMuted ? <VolumeX size={11} /> : <Volume2 size={11} />}
+                        <span>{isScreenAudioMuted ? 'Muted' : 'Live'}</span>
+                      </button>
+                      <span className="text-blue-400 font-mono font-bold">
+                        {isScreenAudioMuted ? '0%' : `${Math.round((screenAudioGain ?? 1.0) * 100)}%`}
+                      </span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1.5"
+                    step="0.05"
+                    disabled={isScreenAudioMuted}
+                    value={screenAudioGain ?? 1.0}
+                    onChange={(e) => onScreenAudioGainChange && onScreenAudioGainChange(parseFloat(e.target.value))}
+                    className="w-full h-1.5 bg-gray-800 rounded-lg accent-blue-500 cursor-pointer disabled:opacity-40"
+                  />
+                  <div className="flex justify-between text-[10px] text-gray-500">
+                    <span>Mute (0%)</span>
+                    <span>Original Level (100%)</span>
+                    <span>Loud (150%)</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Live VU Meters: Microphone & Game Sound */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Voice VU Meter */}
+                <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-3.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                      <Activity size={14} className="text-purple-400" />
+                      <span>Voice Input Meter</span>
+                    </span>
+                    <button
+                      onClick={isTestingMic ? stopMicTest : startMicTest}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition flex items-center gap-1 shadow ${
+                        isTestingMic
+                          ? 'bg-red-600 hover:bg-red-700 text-white'
+                          : 'bg-purple-600 hover:bg-purple-700 text-white'
+                      }`}
+                    >
+                      <Mic size={12} />
+                      <span>{isTestingMic ? 'Stop Test' : 'Test Mic'}</span>
+                    </button>
+                  </div>
+                  <div className="w-full bg-gray-900 border border-gray-800 rounded-full h-2.5 overflow-hidden p-0.5">
+                    <div
+                      className={`h-full rounded-full transition-all duration-75 ${
+                        micLevel > 75 ? 'bg-red-500' : micLevel > 40 ? 'bg-yellow-400' : 'bg-emerald-400'
+                      }`}
+                      style={{ width: `${micLevel}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-500 font-mono">
+                    <span>Silent</span>
+                    <span>{isTestingMic ? `${micLevel}%` : 'Idle'}</span>
+                    <span>Max</span>
+                  </div>
+                </div>
+
+                {/* Game / Screen Sound VU Meter */}
+                <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-3.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                      <Volume2 size={14} className="text-blue-400" />
+                      <span>Game Sound Meter</span>
+                    </span>
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded font-mono font-bold ${
+                        hasScreenAudio ? 'bg-emerald-950 text-emerald-300 border border-emerald-700' : 'bg-gray-800 text-gray-500'
+                      }`}
+                    >
+                      {hasScreenAudio ? 'Active' : 'No Sound'}
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-900 border border-gray-800 rounded-full h-2.5 overflow-hidden p-0.5">
+                    <div
+                      className="h-full rounded-full bg-blue-400 transition-all duration-75"
+                      style={{ width: `${hasScreenAudio && !isScreenAudioMuted ? screenAudioLevel : 0}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-500 font-mono">
+                    <span>Silent</span>
+                    <span>{hasScreenAudio && !isScreenAudioMuted ? `${screenAudioLevel}%` : 'Muted/Off'}</span>
+                    <span>Peak</span>
+                  </div>
+                </div>
+              </div>
+
               {/* Noise Suppression & Audio Processing Toggles */}
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between">
@@ -246,9 +507,6 @@ export default function SettingsModal({
                     <span>Microphone Noise Suppression & Voice Processing</span>
                   </h3>
                 </div>
-                <p className="text-gray-400 text-xs">
-                  Settings apply in real time across Windows, Linux, and macOS in Chrome and Firefox.
-                </p>
 
                 <div className="space-y-3 bg-gray-950/80 border border-gray-800 rounded-2xl p-4 shadow-inner">
                   {/* Noise Suppression Toggle */}
@@ -346,52 +604,6 @@ export default function SettingsModal({
                   </label>
                 </div>
               </div>
-
-              {/* Live Microphone Test & Visual VU Meter */}
-              <div className="bg-gray-950/70 border border-gray-800 rounded-2xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-white font-semibold text-xs sm:text-sm">
-                    <Activity size={16} className="text-purple-400" />
-                    <span>Microphone & Noise Suppression Test</span>
-                  </div>
-                  <button
-                    onClick={isTestingMic ? stopMicTest : startMicTest}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 shadow ${
-                      isTestingMic
-                        ? 'bg-red-600 hover:bg-red-700 text-white'
-                        : 'bg-purple-600 hover:bg-purple-700 text-white'
-                    }`}
-                  >
-                    <Mic size={13} />
-                    <span>{isTestingMic ? 'Stop Test' : 'Test Mic'}</span>
-                  </button>
-                </div>
-
-                <p className="text-xs text-gray-400">
-                  Speak into your microphone to verify voice pickup and check background noise filtering.
-                </p>
-
-                {/* Level Bar */}
-                <div className="space-y-1.5">
-                  <div className="w-full bg-gray-900 border border-gray-800 rounded-full h-3 overflow-hidden p-0.5">
-                    <div
-                      className={`h-full rounded-full transition-all duration-75 ${
-                        micLevel > 75
-                          ? 'bg-red-500'
-                          : micLevel > 40
-                          ? 'bg-yellow-400'
-                          : 'bg-emerald-400'
-                      }`}
-                      style={{ width: `${micLevel}%` }}
-                    />
-                  </div>
-                  <div className="flex justify-between text-[10px] text-gray-500 font-mono">
-                    <span>Silent (Noise Filtered)</span>
-                    <span>{isTestingMic ? `${micLevel}% Input` : 'Mic Idle'}</span>
-                    <span>Max Volume</span>
-                  </div>
-                </div>
-              </div>
             </div>
           )}
 
@@ -443,38 +655,44 @@ export default function SettingsModal({
                 })}
               </div>
 
-              {/* Dedicated Screen Audio Source Selector */}
-              <div className="bg-gray-950/70 border border-gray-800 rounded-xl p-3.5 space-y-2 mt-4">
-                <div className="flex items-center gap-2 text-white font-semibold text-xs sm:text-sm">
-                  <Volume2 size={16} className="text-purple-400" />
-                  <span>Entire Screen / Game Audio Loopback</span>
+              {/* How to Stream Game Sound Guide */}
+              <div className="bg-blue-950/40 border border-blue-900/60 rounded-2xl p-4 text-xs text-blue-200 space-y-2">
+                <p className="font-bold flex items-center gap-1.5 text-white text-sm">
+                  <CheckCircle2 size={16} className="text-blue-400" />
+                  <span>How to Stream Game & Desktop Audio (Without Echo):</span>
+                </p>
+                <div className="space-y-1.5 text-xs text-gray-300">
+                  <p>1. Click the purple <strong>Share</strong> button on the bottom bar (or press <strong>S</strong>).</p>
+                  <p>2. Select <strong>Entire Screen</strong> or a specific <strong>Browser Tab</strong>.</p>
+                  <p>3. At the bottom-left of the browser popup, make sure <strong>"Also share system audio"</strong> (or "Share tab audio") is checked!</p>
+                  <p>4. <strong>Zero Setup Needed</strong>: OpenStream captures the sound natively without needing Stereo Mix or virtual cables!</p>
                 </div>
-                <p className="text-xs text-gray-400">
-                  If your browser cannot capture audio directly (e.g. sharing individual windows on Windows or using Firefox), select your desktop loopback audio device below (e.g. "Stereo Mix", "What U Hear", or Virtual Cable).
-                </p>
-
-                <select
-                  value={screenAudioDevice || ''}
-                  onChange={(e) => onScreenAudioDeviceChange && onScreenAudioDeviceChange(e.target.value)}
-                  className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs sm:text-sm focus:outline-none focus:border-purple-500"
-                >
-                  <option value="">Browser Default (System / Tab Audio)</option>
-                  {devices.audioInputs.map((d) => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label || `Audio Device ${d.deviceId.slice(0, 5)}`}
-                    </option>
-                  ))}
-                </select>
               </div>
 
-              <div className="bg-blue-950/40 border border-blue-900/60 rounded-xl p-3 text-xs text-blue-300 space-y-1">
-                <p className="font-semibold flex items-center gap-1.5">
-                  <CheckCircle2 size={14} className="text-blue-400" />
-                  <span>Cross-Browser Compatibility Tips:</span>
-                </p>
-                <p>• <strong>Chrome / Edge (Windows/Linux/Mac):</strong> Tick <em>"Also share system audio"</em> at the bottom-left of the screen share prompt.</p>
-                <p>• <strong>Firefox:</strong> Firefox shares crisp 60fps video. To stream game sound in Firefox, select <em>Stereo Mix</em> or <em>Virtual Cable</em> above.</p>
-              </div>
+              {/* Advanced optional loopback device (for Linux or special audio interfaces only) */}
+              <details className="bg-gray-950/50 border border-gray-800/80 rounded-xl p-3 text-xs text-gray-400">
+                <summary className="cursor-pointer font-semibold text-gray-300 flex items-center gap-1.5">
+                  <Info size={14} className="text-purple-400" />
+                  <span>Advanced: External Loopback Audio Device (Optional / Linux / Specialized Hardware)</span>
+                </summary>
+                <div className="mt-3 space-y-2 pt-2 border-t border-gray-800">
+                  <p>
+                    Most users do NOT need this. If your browser captures audio directly from the share dialog, leave this as Browser Default.
+                  </p>
+                  <select
+                    value={screenAudioDevice || ''}
+                    onChange={(e) => onScreenAudioDeviceChange && onScreenAudioDeviceChange(e.target.value)}
+                    className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs sm:text-sm focus:outline-none focus:border-purple-500"
+                  >
+                    <option value="">Browser Default (Native System / Tab Audio)</option>
+                    {devices.audioInputs.map((d) => (
+                      <option key={d.deviceId} value={d.deviceId}>
+                        {d.label || `Audio Device ${d.deviceId.slice(0, 5)}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </details>
             </div>
           )}
 
